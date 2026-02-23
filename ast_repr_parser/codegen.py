@@ -70,24 +70,17 @@ def _emit_expr(node: ASTNode, indent: str) -> str:
         return pos + indent + name
     if node.type == "LitConstExpr":
         # LitConstExpr: String "..." or Integer "0" or Unit "()"
-        kind = node.props.get("ty", "")
+        kind = (node.name or node.props.get("ty", "")).strip()
+        value = (node.value or "").strip()
         if "String" in kind or "string" in kind:
-            raw = (node.name or "").strip()
-            if raw.startswith('"') and raw.endswith('"') and raw.count('"') == 2:
-                return pos + indent + raw
-            # e.g. 'String "got here 2"' -> extract quoted part
-            if '"' in raw:
-                i, j = raw.find('"'), raw.rfind('"')
-                if i != -1 and j != -1 and j > i:
-                    return pos + indent + raw[i : j + 1]
-            return pos + indent + f'"{raw}"' if raw else '""'
+            return pos + indent + (f'"{value}"' if value else '""')
         if "Integer" in kind or "Int" in kind:
-            return pos + indent + (node.name.strip() if node.name else "0")
+            return pos + indent + (value if value else "0")
         if "Bool" in kind:
-            return pos + indent + (node.name.strip() if node.name else "false")
+            return pos + indent + (value if value else "false")
         if "Unit" in kind:
-            return pos + indent + "()"
-        return pos + indent + (node.name.strip() if node.name else "()")
+            return pos + indent + (value if value else "()")
+        return pos + indent + (value if value else "()")
     if node.type == "CallExpr":
         base = ""
         args_list = node.list_props.get("arguments", [])
