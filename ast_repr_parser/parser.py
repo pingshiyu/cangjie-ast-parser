@@ -1,6 +1,6 @@
 """
 Parse the Cangjie compiler AST text representation into a generic tree.
-Indentation-based: 4 spaces per nesting level. Root has no leading spaces.
+Structure is bracket-driven ({ ... } and [ ... ]).
 """
 
 import re
@@ -118,20 +118,21 @@ class LineReader:
         return self.i >= len(self.lines)
 
 
-def _parse_node_content(reader: LineReader, parent_indent: int, node: ASTNode) -> None:
-    """Parse lines that belong to node (indent > parent_indent) until } at parent_indent or end."""
+def _parse_node_content(reader: LineReader, node: ASTNode) -> None:
+    """Parse node body until its closing `}` (or end-of-file)."""
     while True:
         cur = reader.peek()
         if cur is None:
             return
-        indent, raw, stripped = cur
-        if indent <= parent_indent:
-            return
+        _indent_val, _raw, stripped = cur
         kind = _parse_line(stripped)
-        reader.consume()
+
+        # End of the current node body.
         if kind[0] == "close":
-            # Consumed the closing }; continue to next sibling
-            continue
+            reader.consume()
+            return
+
+        reader.consume()
         if kind[0] == "comment":
             continue
         if kind[0] == "list_end":
@@ -139,24 +140,26 @@ def _parse_node_content(reader: LineReader, parent_indent: int, node: ASTNode) -
         if kind[0] == "list_start":
             key = kind[1]
             node.list_props[key] = []
-            list_indent = indent
             while True:
                 elem = reader.peek()
                 if elem is None:
                     break
-                ei, eraw, estripped = elem
-                if ei <= list_indent and estripped == "]":
+                _ei, _eraw, estripped = elem
+                ek = _parse_line(estripped)
+                if ek[0] == "list_end":
                     reader.consume()
                     break
-                if ei > list_indent:
-                    ek = _parse_line(estripped)
-                    if ek[0] == "node":
-                        reader.consume()
-                        child = ASTNode(type=ek[1], name=ek[2])
-                        node.list_props[key].append(child)
-                        _parse_node_content(reader, ei, child)
-                    else:
-                        reader.consume()
+                if ek[0] == "comment":
+                    reader.consume()
+                    continue
+                if ek[0] == "node":
+                    reader.consume()
+                    child = ASTNode(type=ek[1], name=ek[2])
+                    node.list_props[key].append(child)
+                    _parse_node_content(reader, child)
+                    continue
+                # Any other token in list is consumed to ensure forward progress.
+                reader.consume()
             continue
         if kind[0] == "kv":
             node.props[kind[1]] = kind[2]
@@ -164,7 +167,7 @@ def _parse_node_content(reader: LineReader, parent_indent: int, node: ASTNode) -
         if kind[0] == "node":
             child = ASTNode(type=kind[1], name=kind[2])
             node.children.append(child)
-            _parse_node_content(reader, indent, child)
+            _parse_node_content(reader, child)
             continue
 
 
@@ -175,11 +178,23 @@ def parse_ast_repr(path: str) -> ASTNode:
         raise ValueError("Empty file")
     indent0, raw0, stripped0 = first
     kind = _parse_line(stripped0)
-    if kind[0] != "node" or kind[1] != "File":
-        raise ValueError(f"Expected 'File: ... {{' at start, got {raw0!r}")
-    name = kind[2]
-    if name.endswith(" {"):
-        name = name[:-2].rstrip()
-    root = ASTNode(type="File", name=name)
-    _parse_node_content(reader, indent0, root)
-    return root
+    if kind[0] != "node":
+        raise ValueError(f"Expected root node at start, got {raw0!r}")
+
+    root_type, root_name = kind[1], kind[2]
+    if root_name.endswith(" {"):
+        root_name = root_name[:-2].rstrip()
+
+    root = ASTNode(type=root_type, name=root_name)
+    _parse_node_content(reader, root)
+
+    if root.type == "File":
+        return root
+
+    if root.type == "Package":
+        for child in root.children:
+            if child.type == "File":
+                return child
+        raise ValueError("Package root found, but no File child was present")
+
+    raise ValueError(f"Expected root 'File' or 'Package', got {raw0!r}")
