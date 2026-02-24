@@ -297,227 +297,6 @@
         return node.children.filter(c => c.type === type);
       }
 
-      function emitType(node) {
-        if (!node) return '<?>';
-        if (node.type === 'PrimitiveType') return node.name || '<?>';
-        if (node.type === 'RefType') {
-          const args = findChild(node, 'typeArguments');
-          const name = node.name || '<?>';
-          if (args && args.children.length > 0) {
-            return name + '<' + args.children.map(emitType).join(', ') + '>';
-          }
-          return name;
-        }
-        return node.type + (node.name ? ' ' + node.name : '');
-      }
-
-      function emitExpr(node, indent) {
-        if (!node) return '<?>';
-        const idt = indent || '';
-        if (node.type === 'RefExpr') return node.name || '<?>';
-        if (node.type === 'LitConstExpr') {
-          const kind = (node.name || '').split(/\s/)[0];
-          const val = node.name && node.name.includes('"') ? node.name.replace(/^[^"]*"/, '').replace(/"\s*$/, '') : node.name;
-          if (kind === 'String') return '"' + (val || '').replace(/"/g, '\\"') + '"';
-          if (kind === 'Integer') return val || '0';
-          if (kind === 'Bool') return val === 'true' ? 'true' : 'false';
-          return node.name || '<?>';
-        }
-        if (node.type === 'CallExpr') {
-          const base = findChild(node, 'BaseFunc');
-          let func = '<?>';
-          if (base) {
-            const ref = findChild(base, 'RefExpr') || findChild(base, 'MemberAccess');
-            if (ref) func = emitExpr(ref, indent);
-          }
-          const argsList = findChild(node, 'arguments');
-          const args = argsList ? argsList.children.map(a => emitExpr(firstExprChild(a), indent)).join(', ') : '';
-          return func + '(' + args + ')';
-        }
-        if (node.type === 'MemberAccess') {
-          const base = findChild(node, 'RefExpr') || findChild(node, 'MemberAccess');
-          const field = node.properties.field || '<?>';
-          const baseStr = base ? emitExpr(base, indent) : '<?>';
-          return baseStr + '.' + field;
-        }
-        if (node.type === 'AssignExpr') {
-          const left = findChild(node, 'MemberAccess') || findChild(node, 'RefExpr');
-          const right = node.children.find(c => c.type !== 'MemberAccess' && c.type !== 'RefExpr' && (c.type.endsWith('Expr') || c.type === 'CallExpr'));
-          const r = right || node.children.find(c => c.type.includes('Expr') || c.type === 'CallExpr');
-          return (left ? emitExpr(left, indent) : '<?>') + ' = ' + (r ? emitExpr(r, indent) : '<?>');
-        }
-        if (node.type === 'ResumeExpr') {
-          const call = findChild(node, 'CallExpr');
-          const rest = node.children.filter(c => c !== call && (c.type === 'LitConstExpr' || c.type === 'RefExpr' || c.type.includes('Expr')));
-          const withExpr = rest[0];
-          return 'resume ' + (call ? emitExpr(call, indent) : '<?>') + ' with ' + (withExpr ? emitExpr(withExpr, indent) : '<?>');
-        }
-        if (node.type === 'InterpolationExpr') {
-          const block = findChild(node, 'Block');
-          if (block) {
-            const ex = block.children.find(c => c.type === 'RefExpr' || c.type.includes('Expr'));
-            return ex ? emitExpr(ex, indent) : '<?>';
-          }
-          return '<?>';
-        }
-        if (node.type === 'StrInterpolationExpr') {
-          const parts = findChild(node, 'strPartExprs');
-          if (!parts) return '"' + (node.name || '').replace(/^[^"]*"/, '').replace(/"\s*$/, '').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
-          const inner = parts.children.map(p => {
-            if (p.type === 'LitConstExpr') {
-              const val = (p.name || '').replace(/^String\s*"/, '').replace(/"\s*$/, '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-              return val;
-            }
-            if (p.type === 'InterpolationExpr') {
-              const block = findChild(p, 'Block');
-              const ex = block && block.children.find(c => c.type === 'RefExpr' || c.type.includes('Expr'));
-              return '${' + (ex ? emitExpr(ex, indent) : '') + '}';
-            }
-            return '';
-          }).join('');
-          return '"' + inner + '"';
-        }
-        return node.type + (node.name ? ' ' + node.name : '');
-      }
-
-      function firstExprChild(node) {
-        const expr = node.children.find(c => c.type === 'RefExpr' || c.type === 'LitConstExpr' || c.type === 'CallExpr' || c.type === 'MemberAccess' || c.type === 'StrInterpolationExpr' || c.type === 'InterpolationExpr' || c.type === 'ResumeExpr');
-        return expr || node.children[0];
-      }
-
-      function emitBlock(blockNode, indent) {
-        const lines = [];
-        const stmtTypes = ['VarDecl', 'TryExpr', 'CallExpr', 'AssignExpr', 'ResumeExpr', 'PerformExpr', 'LitConstExpr', 'RefExpr', 'StrInterpolationExpr'];
-        for (const c of blockNode.children) {
-          if (c.type === 'Block' && c !== blockNode) {
-            lines.push(indent + '{');
-            lines.push(emitBlock(c, indent + '    '));
-            lines.push(indent + '}');
-          } else if (stmtTypes.some(t => c.type === t)) {
-            const line = emitStmt(c, indent);
-            if (line) lines.push(line);
-          }
-        }
-        return lines.join('\n');
-      }
-
-      function emitStmt(node, indent) {
-        const idt = indent || '';
-        if (node.type === 'VarDecl') {
-          const name = (node.name || '').replace(/^let\s+/, '') || 'x';
-          const typeNode = node.children.find(c => c.type === 'RefType' || c.type === 'PrimitiveType');
-          const typeStr = typeNode ? emitType(typeNode) : '';
-          const init = node.children.find(c => c.type === 'CallExpr' || c.type === 'TryExpr');
-          const initStr = init ? emitExpr(init, indent) : '';
-          if (typeStr && initStr) return idt + 'let ' + name + ' : ' + typeStr + ' = ' + initStr;
-          if (initStr) return idt + 'let ' + name + ' = ' + initStr;
-          return idt + 'let ' + name;
-        }
-        if (node.type === 'TryExpr') {
-          const tryBlock = findChild(node, 'TryBlock');
-          const tryBody = tryBlock && findChild(tryBlock, 'Block');
-          const handle = findChild(node, 'Handle');
-          const handlePattern = handle && findChild(handle, 'HandlePattern');
-          const handleBlock = handle && findChild(handle, 'HandleBlock');
-          const handleBody = handleBlock && findChild(handleBlock, 'Block');
-          const refTypes = handlePattern ? findChildren(handlePattern, 'RefType') : [];
-          const varPattern = handlePattern && handlePattern.children.find(c => c.type === 'VarPattern');
-          const cmdStr = refTypes[0] ? emitType(refTypes[0]) : '_';
-          const resStr = varPattern && refTypes[1] ? (varPattern.name || 'r') + ': ' + emitType(refTypes[1]) : '';
-          const patternStr = '(_: ' + cmdStr + (resStr ? ', ' + resStr : '') + ')';
-          let out = idt + 'try {\n';
-          if (tryBody) out += emitBlock(tryBody, indent + '    ') + '\n';
-          out += idt + '} handle ' + patternStr + ' {\n';
-          if (handleBody) out += emitBlock(handleBody, indent + '    ') + '\n';
-          out += idt + '}';
-          return out;
-        }
-        if (node.type === 'PerformExpr') {
-          const call = findChild(node, 'CallExpr');
-          const perf = call ? 'perform ' + emitExpr(call, indent) : 'perform <?>';
-          return idt + perf;
-        }
-        if (node.type === 'CallExpr' || node.type === 'AssignExpr' || node.type === 'ResumeExpr') {
-          return idt + emitExpr(node, indent);
-        }
-        if (node.type === 'StrInterpolationExpr') {
-          return idt + emitExpr(node, indent);
-        }
-        if (node.type === 'LitConstExpr' || node.type === 'RefExpr') {
-          return idt + emitExpr(node, indent);
-        }
-        return '';
-      }
-
-      function emitFile(fileNode) {
-        const lines = [];
-        const pkgSpec = findChild(fileNode, 'PackageSpec');
-        if (pkgSpec) {
-          const name = (pkgSpec.properties._content && pkgSpec.properties._content[0]) ? pkgSpec.properties._content[0] : (pkgSpec.name || 'main');
-          lines.push('package ' + name);
-          lines.push('');
-        } else if (fileNode.properties.fullPackageName) {
-          lines.push('package ' + fileNode.properties.fullPackageName);
-          lines.push('');
-        }
-        const imports = findChildren(fileNode, 'ImportSpec');
-        if (imports.length) {
-          const byPath = {};
-          for (const imp of imports) {
-            const path = imp.properties.prefixPaths || 'std';
-            if (!byPath[path]) byPath[path] = [];
-            byPath[path].push(imp.name || '');
-          }
-          for (const [path, names] of Object.entries(byPath)) {
-            const n = names.filter(Boolean);
-            if (n.length) lines.push('import ' + path + '.{' + n.join(', ') + '}');
-          }
-          lines.push('');
-        }
-        const classes = findChildren(fileNode, 'ClassDecl');
-        for (const cl of classes) {
-          const superTypes = findChild(cl, 'inheritedTypes');
-          let superStr = '';
-          if (superTypes && superTypes.children.length) {
-            superStr = ' <: ' + superTypes.children.map(emitType).join(', ');
-          }
-          lines.push('class ' + (cl.name || '?') + superStr + ' {}');
-        }
-        if (classes.length) lines.push('');
-        const main = findChild(fileNode, 'MainDecl');
-        if (main) {
-          const funcBody = findChild(main, 'FuncBody');
-          const block = funcBody && findChild(funcBody, 'Block');
-          lines.push('main() {');
-          if (block) lines.push(emitBlock(block, '    '));
-          lines.push('}');
-        }
-        return lines.join('\n');
-      }
-
-      function prettyPrintAST(root) {
-        if (!root || root.type !== 'root' || !root.children.length) return '';
-        const first = root.children[0];
-        let files = [];
-        if (first.type === 'Package') {
-          files = findChildren(first, 'File');
-          if (files.length === 0 && first.children.length > 0) {
-            files = first.children.filter(function (c) {
-              return c.type === 'File' || findChild(c, 'PackageSpec') || findChild(c, 'MainDecl');
-            });
-            if (files.length === 0) files = [first];
-          }
-        } else if (first.type === 'File') {
-          files = root.children.filter(c => c.type === 'File');
-        } else {
-          files = root.children.filter(function (c) {
-            return c.type === 'File' || findChild(c, 'PackageSpec') || findChild(c, 'MainDecl');
-          });
-        }
-        if (files.length === 0) return '';
-        return files.map(emitFile).join('\n\n');
-      }
-
       function getLabel(node) {
         if (node.type === 'root') return 'AST';
         if (node.name) return node.type + ': ' + node.name;
@@ -556,7 +335,6 @@
         const li = document.createElement('li');
         li.className = 'node' + (isLeaf ? ' leaf' : '');
         li.dataset.depth = String(depth);
-        if (!matchesFilter) li.style.display = 'none';
 
         const toggle = document.createElement('span');
         toggle.className = 'node-toggle' + (isLeaf ? '' : ' collapsed');
@@ -647,16 +425,39 @@
         ul.className = 'tree';
         root.children.forEach(child => ul.appendChild(renderNode(child, simplify, filter)));
         container.appendChild(ul);
+        applyFilter();
       }
 
       function applyFilter() {
         const filter = document.getElementById('search').value.trim().toLowerCase();
-        const simplify = document.getElementById('simplify').checked;
-        document.querySelectorAll('.node').forEach(li => {
-          const content = li.querySelector('.node-content');
+        const allNodes = Array.from(document.querySelectorAll('.node'));
+        if (!filter) {
+          allNodes.forEach(li => { li.style.display = ''; });
+          return;
+        }
+        function nodeMatches(li) {
           const label = (li.querySelector('.node-type')?.textContent || '') + ' ' + (li.querySelector('.node-name')?.textContent || '');
-          const match = !filter || label.toLowerCase().includes(filter);
-          li.style.display = match ? '' : 'none';
+          const meta = li.querySelector('.node-meta')?.textContent || '';
+          return label.toLowerCase().includes(filter) || meta.toLowerCase().includes(filter);
+        }
+        const matching = allNodes.filter(nodeMatches);
+        const showSet = new Set();
+        matching.forEach(li => {
+          let el = li;
+          while (el) {
+            if (el.classList?.contains('node')) showSet.add(el);
+            el = el.parentElement;
+            if (el?.id === 'treeRoot') break;
+          }
+        });
+        allNodes.forEach(li => {
+          li.style.display = showSet.has(li) ? '' : 'none';
+        });
+        showSet.forEach(li => {
+          const ul = li.querySelector(':scope > ul');
+          const toggle = li.querySelector('.node-toggle');
+          if (ul) ul.classList.remove('collapsed');
+          if (toggle) toggle.classList.remove('collapsed');
         });
       }
 
@@ -730,9 +531,7 @@
           return;
         }
         if (!rawText) {
-          const text = prettyPrintAST(root);
-          content.textContent = text || '(no file content to pretty-print)';
-          hintEl.textContent = 'Approximate Cangjie source (reload AST file for canonical run_ast_to_cangjie output).';
+          content.textContent = 'Reload the AST file to use Pretty-print to .cj (run_ast_to_cangjie --no-comments).';
           panel.classList.toggle('visible', true);
           return;
         }
@@ -778,11 +577,7 @@
             );
             content.textContent = result !== undefined && result !== null ? String(result) : '';
           } catch (err) {
-            const fallback = prettyPrintAST(root);
-            content.textContent = fallback
-              ? fallback + '\n\n/* Fallback (approximate) used: ' + err.message + ' */'
-              : 'Error: ' + err.message + (root ? '\n\n(No JS fallback content.)' : '');
-            hintEl.textContent = 'Approximate output (run_ast_to_cangjie failed: ' + err.message + ').';
+            content.textContent = 'Error: ' + err.message;
           }
           panel.classList.toggle('visible', true);
         })();
