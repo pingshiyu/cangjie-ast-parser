@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AST Visualiser — Cangjie</title>
+  <style>
+    :root {
+      --bg: #0f0f12;
+      --surface: #18181c;
+      --border: #2a2a30;
+      --text: #e4e4e7;
+      --text-dim: #71717a;
+      --accent: #a78bfa;
+      --accent-dim: #7c5dd4;
+      --type-decl: #34d399;
+      --type-expr: #fbbf24;
+      --type-other: #60a5fa;
+      --pos: #22d3ee;
+      --radius: 6px;
+      --font: "JetBrains Mono", "Fira Code", "SF Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--font);
+      font-size: 13px;
+      line-height: 1.45;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .toolbar label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      color: var(--text-dim);
+    }
+    .toolbar input[type="file"] { display: none; }
+    .btn {
+      padding: 6px 12px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+    }
+    .btn:hover { background: var(--border); }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+    .btn.primary:hover { background: var(--accent-dim); border-color: var(--accent-dim); }
+    .search-wrap {
+      flex: 1;
+      min-width: 180px;
+      max-width: 320px;
+    }
+    .search-wrap input {
+      width: 100%;
+      padding: 6px 10px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+    }
+    .search-wrap input::placeholder { color: var(--text-dim); }
+    .tree-container {
+      flex: 1;
+      overflow: auto;
+      padding: 16px;
+    }
+    .tree-container.drag-over { background: rgba(167, 139, 250, 0.08); outline: 2px dashed var(--accent); outline-offset: -2px; }
+    .pretty-panel { display: none; flex-direction: column; border-bottom: 1px solid var(--border); max-height: 50vh; }
+    .pretty-panel.visible { display: flex; }
+    .pretty-toolbar { padding: 8px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; background: var(--surface); }
+    .pretty-content { overflow: auto; padding: 16px; white-space: pre; font-size: 13px; font-family: var(--font); }
+    .tree {
+      list-style: none;
+      margin: 0;
+      padding-left: 0;
+    }
+    .tree ul {
+      list-style: none;
+      margin: 0;
+      padding-left: 18px;
+      border-left: 1px solid var(--border);
+      margin-left: 6px;
+    }
+    .tree ul.collapsed { display: none; }
+    .node {
+      margin: 2px 0;
+      position: relative;
+    }
+    .node-toggle {
+      position: absolute;
+      left: -14px;
+      top: 2px;
+      width: 14px;
+      height: 14px;
+      cursor: pointer;
+      color: var(--text-dim);
+      font-size: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+      border-radius: 2px;
+    }
+    .node-toggle:hover { color: var(--accent); background: var(--border); }
+    .node-toggle.collapsed::before { content: "▶"; }
+    .node-toggle:not(.collapsed)::before { content: "▼"; }
+    .node.leaf .node-toggle { visibility: hidden; pointer-events: none; }
+    .node-content {
+      padding: 4px 8px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .node-content:hover { background: rgba(255,255,255,0.04); }
+    .node-content.highlight { background: rgba(167, 139, 250, 0.15); }
+    .node-type {
+      font-weight: 600;
+      color: var(--type-other);
+    }
+    .node-type.decl { color: var(--type-decl); }
+    .node-type.expr { color: var(--type-expr); }
+    .node-name {
+      color: var(--accent);
+      word-break: break-all;
+    }
+    .node-name.empty { color: var(--text-dim); font-style: italic; }
+    .node-meta {
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    .node-meta .position { color: var(--pos); }
+    .node-props {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 2px;
+    }
+    .node-props summary { cursor: pointer; }
+    .node-props[open] summary { margin-bottom: 4px; }
+    .node-children-count {
+      color: var(--text-dim);
+      font-size: 11px;
+    }
+    .list-node .node-type { color: var(--text-dim); }
+    .empty-node .node-name { color: var(--text-dim); }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <label>
+      <span class="btn primary">Open AST file</span>
+      <input type="file" id="fileInput" accept=".txt,text/plain" />
+    </label>
+    <div class="search-wrap">
+      <input type="text" id="search" placeholder="Filter by type or name…" />
+    </div>
+    <button type="button" class="btn" id="expandAll">Expand all</button>
+    <button type="button" class="btn" id="collapseAll">Collapse all</button>
+    <label>
+      <input type="checkbox" id="simplify" checked /> Simplify (hide ptr, fullPackageName)
+    </label>
+    <button type="button" class="btn" id="prettyPrint">Pretty-print to .cj</button>
+  </div>
+  <div class="pretty-panel" id="prettyPanel">
+    <div class="pretty-toolbar">
+      <button type="button" class="btn" id="copyPretty">Copy</button>
+      <span class="node-meta" id="prettyHint">Approximate Cangjie source reconstructed from AST (may be incomplete).</span>
+    </div>
+    <pre class="pretty-content" id="prettyContent"></pre>
+  </div>
+  <div class="tree-container" id="dropZone">
+    <div id="placeholder">Open an AST file (e.g. run_AST/0_parse_ast.txt) or drag and drop it here.</div>
+    <div id="treeRoot" style="display: none;"></div>
+  </div>
+
+  <script>
+    (function () {
+      const NOISE_KEYS = new Set(['ptr', 'fullPackageName', 'scopeName', 'ty']);
+      const DECL_TYPES = new Set(['Package', 'File', 'ClassDecl', 'MainDecl', 'ImportSpec', 'VarDecl', 'PackageSpec', 'FuncBody', 'Handle', 'HandlePattern', 'HandleBlock', 'ClassBody', 'FuncParamList']);
+      const EXPR_TYPES = new Set(['CallExpr', 'RefExpr', 'LitConstExpr', 'TryExpr', 'PerformExpr', 'InterpolationExpr', 'Block']);
+
+      function getIndent(line) {
+        const m = line.match(/^(\s*)/);
+        return m ? m[1].length : 0;
+      }
+
+      function parseAST(text) {
+        const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        const lines = normalized.split('\n');
+        const stack = [];
+        const root = { type: 'root', name: '', children: [], properties: {}, isList: false };
+        let current = root;
+        let i = 0;
+
+        while (i < lines.length) {
+          const line = lines[i];
+          const indent = getIndent(line);
+          const content = line.slice(indent).trimEnd();
+          const trimmed = content.trim();
+
+          if (trimmed === '') {
+            i++;
+            continue;
+          }
+
+          if (trimmed === '}' || trimmed === ']') {
+            while (stack.length > 0 && indent <= stack[stack.length - 1].indent) {
+              const frame = stack.pop();
+              current = frame.parent;
+              if ((trimmed === '}' && frame.close === '}') || (trimmed === ']' && frame.close === ']')) break;
+            }
+            i++;
+            continue;
+          }
+
+          const openBlockNamed = trimmed.match(/^([A-Za-z][\w.]*):\s*(.*)\s*\{\s*$/);
+          if (openBlockNamed) {
+            const type = openBlockNamed[1];
+            const name = openBlockNamed[2].trim();
+            const node = { type, name, children: [], properties: {}, isList: false };
+            current.children.push(node);
+            stack.push({ indent, close: '}', parent: current });
+            current = node;
+            i++;
+            continue;
+          }
+
+          const openBlock = trimmed.match(/^([A-Za-z][\w.]*)\s*\{\s*$/);
+          if (openBlock) {
+            const type = openBlock[1];
+            const node = { type, name: '', children: [], properties: {}, isList: false };
+            current.children.push(node);
+            stack.push({ indent, close: '}', parent: current });
+            current = node;
+            i++;
+            continue;
+          }
+
+          const openList = trimmed.match(/^([A-Za-z][\w.]*)\s*\[\s*$/);
+          if (openList) {
+            const listName = openList[1];
+            const listNode = { type: listName, name: '[]', children: [], properties: {}, isList: true };
+            current.children.push(listNode);
+            stack.push({ indent, close: ']', parent: current });
+            current = listNode;
+            i++;
+            continue;
+          }
+
+          if (trimmed.startsWith('//')) {
+            current.properties['_comment'] = (current.properties['_comment'] || []).concat(trimmed.slice(2).trim());
+            i++;
+            continue;
+          }
+
+          const kv = trimmed.match(/^([A-Za-z][\w.]*):\s*(.*)$/);
+          if (kv) {
+            const key = kv[1];
+            const value = kv[2].trim();
+            if (!current.properties[key]) current.properties[key] = value;
+            else if (Array.isArray(current.properties[key])) current.properties[key].push(value);
+            else current.properties[key] = [current.properties[key], value];
+            i++;
+            continue;
+          }
+
+          current.properties['_content'] = (current.properties['_content'] || []).concat(trimmed);
+          i++;
+        }
+
+        return root;
+      }
+
+      function findChild(node, type) {
+        return node.children.find(c => c.type === type);
+      }
+      function findChildren(node, type) {
+        return node.children.filter(c => c.type === type);
+      }
+
+      function emitType(node) {
+        if (!node) return '<?>';
+        if (node.type === 'PrimitiveType') return node.name || '<?>';
+        if (node.type === 'RefType') {
+          const args = findChild(node, 'typeArguments');
+          const name = node.name || '<?>';
+          if (args && args.children.length > 0) {
+            return name + '<' + args.children.map(emitType).join(', ') + '>';
+          }
+          return name;
+        }
+        return node.type + (node.name ? ' ' + node.name : '');
+      }
+
+      function emitExpr(node, indent) {
+        if (!node) return '<?>';
+        const idt = indent || '';
+        if (node.type === 'RefExpr') return node.name || '<?>';
+        if (node.type === 'LitConstExpr') {
+          const kind = (node.name || '').split(/\s/)[0];
+          const val = node.name && node.name.includes('"') ? node.name.replace(/^[^"]*"/, '').replace(/"\s*$/, '') : node.name;
+          if (kind === 'String') return '"' + (val || '').replace(/"/g, '\\"') + '"';
+          if (kind === 'Integer') return val || '0';
+          if (kind === 'Bool') return val === 'true' ? 'true' : 'false';
+          return node.name || '<?>';
+        }
+        if (node.type === 'CallExpr') {
+          const base = findChild(node, 'BaseFunc');
+          let func = '<?>';
+          if (base) {
+            const ref = findChild(base, 'RefExpr') || findChild(base, 'MemberAccess');
+            if (ref) func = emitExpr(ref, indent);
+          }
+          const argsList = findChild(node, 'arguments');
+          const args = argsList ? argsList.children.map(a => emitExpr(firstExprChild(a), indent)).join(', ') : '';
+          return func + '(' + args + ')';
+        }
+        if (node.type === 'MemberAccess') {
+          const base = findChild(node, 'RefExpr') || findChild(node, 'MemberAccess');
+          const field = node.properties.field || '<?>';
+          const baseStr = base ? emitExpr(base, indent) : '<?>';
+          return baseStr + '.' + field;
+        }
+        if (node.type === 'AssignExpr') {
+          const left = findChild(node, 'MemberAccess') || findChild(node, 'RefExpr');
+          const right = node.children.find(c => c.type !== 'MemberAccess' && c.type !== 'RefExpr' && (c.type.endsWith('Expr') || c.type === 'CallExpr'));
+          const r = right || node.children.find(c => c.type.includes('Expr') || c.type === 'CallExpr');
+          return (left ? emitExpr(left, indent) : '<?>') + ' = ' + (r ? emitExpr(r, indent) : '<?>');
+        }
+        if (node.type === 'ResumeExpr') {
+          const call = findChild(node, 'CallExpr');
+          const rest = node.children.filter(c => c !== call && (c.type === 'LitConstExpr' || c.type === 'RefExpr' || c.type.includes('Expr')));
+          const withExpr = rest[0];
+          return 'resume ' + (call ? emitExpr(call, indent) : '<?>') + ' with ' + (withExpr ? emitExpr(withExpr, indent) : '<?>');
+        }
+        if (node.type === 'InterpolationExpr') {
+          const block = findChild(node, 'Block');
+          if (block) {
+            const ex = block.children.find(c => c.type === 'RefExpr' || c.type.includes('Expr'));
+            return ex ? emitExpr(ex, indent) : '<?>';
+          }
+          return '<?>';
+        }
+        if (node.type === 'StrInterpolationExpr') {
+          const parts = findChild(node, 'strPartExprs');
+          if (!parts) return '"' + (node.name || '').replace(/^[^"]*"/, '').replace(/"\s*$/, '').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+          const inner = parts.children.map(p => {
+            if (p.type === 'LitConstExpr') {
+              const val = (p.name || '').replace(/^String\s*"/, '').replace(/"\s*$/, '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+              return val;
+            }
+            if (p.type === 'InterpolationExpr') {
+              const block = findChild(p, 'Block');
+              const ex = block && block.children.find(c => c.type === 'RefExpr' || c.type.includes('Expr'));
+              return '${' + (ex ? emitExpr(ex, indent) : '') + '}';
+            }
+            return '';
+          }).join('');
+          return '"' + inner + '"';
+        }
+        return node.type + (node.name ? ' ' + node.name : '');
+      }
+
+      function firstExprChild(node) {
+        const expr = node.children.find(c => c.type === 'RefExpr' || c.type === 'LitConstExpr' || c.type === 'CallExpr' || c.type === 'MemberAccess' || c.type === 'StrInterpolationExpr' || c.type === 'InterpolationExpr' || c.type === 'ResumeExpr');
+        return expr || node.children[0];
+      }
+
+      function emitBlock(blockNode, indent) {
+        const lines = [];
+        const stmtTypes = ['VarDecl', 'TryExpr', 'CallExpr', 'AssignExpr', 'ResumeExpr', 'PerformExpr', 'LitConstExpr', 'RefExpr', 'StrInterpolationExpr'];
+        for (const c of blockNode.children) {
+          if (c.type === 'Block' && c !== blockNode) {
+            lines.push(indent + '{');
+            lines.push(emitBlock(c, indent + '    '));
+            lines.push(indent + '}');
+          } else if (stmtTypes.some(t => c.type === t)) {
+            const line = emitStmt(c, indent);
+            if (line) lines.push(line);
+          }
+        }
+        return lines.join('\n');
+      }
+
+      function emitStmt(node, indent) {
+        const idt = indent || '';
+        if (node.type === 'VarDecl') {
+          const name = (node.name || '').replace(/^let\s+/, '') || 'x';
+          const typeNode = node.children.find(c => c.type === 'RefType' || c.type === 'PrimitiveType');
+          const typeStr = typeNode ? emitType(typeNode) : '';
+          const init = node.children.find(c => c.type === 'CallExpr' || c.type === 'TryExpr');
+          const initStr = init ? emitExpr(init, indent) : '';
+          if (typeStr && initStr) return idt + 'let ' + name + ' : ' + typeStr + ' = ' + initStr;
+          if (initStr) return idt + 'let ' + name + ' = ' + initStr;
+          return idt + 'let ' + name;
+        }
+        if (node.type === 'TryExpr') {
+          const tryBlock = findChild(node, 'TryBlock');
+          const tryBody = tryBlock && findChild(tryBlock, 'Block');
+          const handle = findChild(node, 'Handle');
+          const handlePattern = handle && findChild(handle, 'HandlePattern');
+          const handleBlock = handle && findChild(handle, 'HandleBlock');
+          const handleBody = handleBlock && findChild(handleBlock, 'Block');
+          const refTypes = handlePattern ? findChildren(handlePattern, 'RefType') : [];
+          const varPattern = handlePattern && handlePattern.children.find(c => c.type === 'VarPattern');
+          const cmdStr = refTypes[0] ? emitType(refTypes[0]) : '_';
+          const resStr = varPattern && refTypes[1] ? (varPattern.name || 'r') + ': ' + emitType(refTypes[1]) : '';
+          const patternStr = '(_: ' + cmdStr + (resStr ? ', ' + resStr : '') + ')';
+          let out = idt + 'try {\n';
+          if (tryBody) out += emitBlock(tryBody, indent + '    ') + '\n';
+          out += idt + '} handle ' + patternStr + ' {\n';
+          if (handleBody) out += emitBlock(handleBody, indent + '    ') + '\n';
+          out += idt + '}';
+          return out;
+        }
+        if (node.type === 'PerformExpr') {
+          const call = findChild(node, 'CallExpr');
+          const perf = call ? 'perform ' + emitExpr(call, indent) : 'perform <?>';
+          return idt + perf;
+        }
+        if (node.type === 'CallExpr' || node.type === 'AssignExpr' || node.type === 'ResumeExpr') {
+          return idt + emitExpr(node, indent);
+        }
+        if (node.type === 'StrInterpolationExpr') {
+          return idt + emitExpr(node, indent);
+        }
+        if (node.type === 'LitConstExpr' || node.type === 'RefExpr') {
+          return idt + emitExpr(node, indent);
+        }
+        return '';
+      }
+
+      function emitFile(fileNode) {
+        const lines = [];
+        const pkgSpec = findChild(fileNode, 'PackageSpec');
+        if (pkgSpec) {
+          const name = (pkgSpec.properties._content && pkgSpec.properties._content[0]) ? pkgSpec.properties._content[0] : (pkgSpec.name || 'main');
+          lines.push('package ' + name);
+          lines.push('');
+        } else if (fileNode.properties.fullPackageName) {
+          lines.push('package ' + fileNode.properties.fullPackageName);
+          lines.push('');
+        }
+        const imports = findChildren(fileNode, 'ImportSpec');
+        if (imports.length) {
+          const byPath = {};
+          for (const imp of imports) {
+            const path = imp.properties.prefixPaths || 'std';
+            if (!byPath[path]) byPath[path] = [];
+            byPath[path].push(imp.name || '');
+          }
+          for (const [path, names] of Object.entries(byPath)) {
+            const n = names.filter(Boolean);
+            if (n.length) lines.push('import ' + path + '.{' + n.join(', ') + '}');
+          }
+          lines.push('');
+        }
+        const classes = findChildren(fileNode, 'ClassDecl');
+        for (const cl of classes) {
+          const superTypes = findChild(cl, 'inheritedTypes');
+          let superStr = '';
+          if (superTypes && superTypes.children.length) {
+            superStr = ' <: ' + superTypes.children.map(emitType).join(', ');
+          }
+          lines.push('class ' + (cl.name || '?') + superStr + ' {}');
+        }
+        if (classes.length) lines.push('');
+        const main = findChild(fileNode, 'MainDecl');
+        if (main) {
+          const funcBody = findChild(main, 'FuncBody');
+          const block = funcBody && findChild(funcBody, 'Block');
+          lines.push('main() {');
+          if (block) lines.push(emitBlock(block, '    '));
+          lines.push('}');
+        }
+        return lines.join('\n');
+      }
+
+      function prettyPrintAST(root) {
+        if (!root || root.type !== 'root' || !root.children.length) return '';
+        const first = root.children[0];
+        let files = [];
+        if (first.type === 'Package') {
+          files = findChildren(first, 'File');
+          if (files.length === 0 && first.children.length > 0) {
+            files = first.children.filter(function (c) {
+              return c.type === 'File' || findChild(c, 'PackageSpec') || findChild(c, 'MainDecl');
+            });
+            if (files.length === 0) files = [first];
+          }
+        } else if (first.type === 'File') {
+          files = root.children.filter(c => c.type === 'File');
+        } else {
+          files = root.children.filter(function (c) {
+            return c.type === 'File' || findChild(c, 'PackageSpec') || findChild(c, 'MainDecl');
+          });
+        }
+        if (files.length === 0) return '';
+        return files.map(emitFile).join('\n\n');
+      }
+
+      function getLabel(node) {
+        if (node.type === 'root') return 'AST';
+        if (node.name) return node.type + ': ' + node.name;
+        return node.type;
+      }
+
+      function getPosition(props) {
+        return props.position || props.curFile ? (props.curFile + (props.position ? ' ' + props.position : '')) : '';
+      }
+
+      function filterNoise(props, simplify) {
+        if (!props || typeof props !== 'object') return {};
+        const out = {};
+        for (const [k, v] of Object.entries(props)) {
+          if (k.startsWith('_')) continue;
+          if (simplify && NOISE_KEYS.has(k)) continue;
+          if (v !== '' && v !== undefined) out[k] = v;
+        }
+        return out;
+      }
+
+      function renderNode(node, simplify, filter, depth = 0) {
+        const label = getLabel(node);
+        const pos = getPosition(node.properties);
+        const childCount = node.children.length;
+        const isLeaf = childCount === 0;
+        const typeClass = DECL_TYPES.has(node.type) ? 'decl' : EXPR_TYPES.has(node.type) ? 'expr' : '';
+        const nameClass = node.name ? '' : 'empty';
+        const listClass = node.isList ? 'list-node' : '';
+        const emptyClass = !node.name && !node.isList && isLeaf ? 'empty-node' : '';
+
+        const matchesFilter = !filter || filter === '' ||
+          label.toLowerCase().includes(filter.toLowerCase()) ||
+          (node.properties.curFile && node.properties.curFile.toLowerCase().includes(filter.toLowerCase()));
+
+        const li = document.createElement('li');
+        li.className = 'node' + (isLeaf ? ' leaf' : '');
+        li.dataset.depth = String(depth);
+        if (!matchesFilter) li.style.display = 'none';
+
+        const toggle = document.createElement('span');
+        toggle.className = 'node-toggle' + (isLeaf ? '' : ' collapsed');
+        toggle.setAttribute('aria-label', isLeaf ? '' : 'Toggle');
+        if (!isLeaf) {
+          toggle.addEventListener('click', function (e) {
+            e.stopPropagation();
+            toggle.classList.toggle('collapsed');
+            li.querySelector('ul')?.classList.toggle('collapsed');
+          });
+        }
+
+        const content = document.createElement('div');
+        content.className = 'node-content' + (matchesFilter ? '' : '');
+        content.addEventListener('click', function () {
+          document.querySelectorAll('.node-content.highlight').forEach(el => el.classList.remove('highlight'));
+          if (matchesFilter) content.classList.add('highlight');
+        });
+
+        const typeSpan = document.createElement('span');
+        typeSpan.className = 'node-type ' + typeClass;
+        typeSpan.textContent = node.type;
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'node-name ' + nameClass;
+        if (node.isList) nameSpan.textContent = '[]';
+        else if (node.name) nameSpan.textContent = node.name;
+        else nameSpan.textContent = '';
+        if (!node.name && !node.isList) nameSpan.classList.add('empty');
+
+        content.appendChild(toggle);
+        content.appendChild(typeSpan);
+        if (node.name && !node.isList) content.appendChild(nameSpan);
+        if (node.isList) content.appendChild(nameSpan);
+
+        if (pos) {
+          const meta = document.createElement('span');
+          meta.className = 'node-meta';
+          meta.innerHTML = '<span class="position">' + escapeHtml(pos) + '</span>';
+          content.appendChild(meta);
+        }
+
+        if (childCount > 0) {
+          const count = document.createElement('span');
+          count.className = 'node-children-count';
+          count.textContent = ' (' + childCount + ')';
+          content.appendChild(count);
+        }
+
+        const props = filterNoise(node.properties, simplify);
+        const propKeys = Object.keys(props).filter(k => !k.startsWith('_'));
+        if (propKeys.length > 0) {
+          const details = document.createElement('details');
+          details.className = 'node-props';
+          details.innerHTML = '<summary>props</summary>' + Object.entries(props).map(([k, v]) => k + ': ' + (Array.isArray(v) ? v.join(', ') : v)).join('<br/>');
+          content.appendChild(details);
+        }
+
+        li.appendChild(content);
+
+        const branch = document.createElement('ul');
+        branch.className = 'collapsed';
+        node.children.forEach(child => branch.appendChild(renderNode(child, simplify, filter, depth + 1)));
+        li.appendChild(branch);
+
+        return li;
+      }
+
+      function escapeHtml(s) {
+        const div = document.createElement('div');
+        div.textContent = s;
+        return div.innerHTML;
+      }
+
+      function renderTree(root, simplify, filter) {
+        const container = document.getElementById('treeRoot');
+        const placeholder = document.getElementById('placeholder');
+        if (!root || root.type !== 'root' || root.children.length === 0) {
+          container.style.display = 'none';
+          placeholder.style.display = 'block';
+          placeholder.textContent = 'No AST loaded or file is empty.';
+          return;
+        }
+        placeholder.style.display = 'none';
+        container.style.display = 'block';
+        container.innerHTML = '';
+        const ul = document.createElement('ul');
+        ul.className = 'tree';
+        root.children.forEach(child => ul.appendChild(renderNode(child, simplify, filter)));
+        container.appendChild(ul);
+      }
+
+      function applyFilter() {
+        const filter = document.getElementById('search').value.trim().toLowerCase();
+        const simplify = document.getElementById('simplify').checked;
+        document.querySelectorAll('.node').forEach(li => {
+          const content = li.querySelector('.node-content');
+          const label = (li.querySelector('.node-type')?.textContent || '') + ' ' + (li.querySelector('.node-name')?.textContent || '');
+          const match = !filter || label.toLowerCase().includes(filter);
+          li.style.display = match ? '' : 'none';
+        });
+      }
+
+      function loadASTFile(file) {
+        if (!file || !file.name.endsWith('.txt')) return;
+        const reader = new FileReader();
+        reader.onload = function () {
+          try {
+            const root = parseAST(reader.result);
+            window._astRoot = root;
+            renderTree(root, document.getElementById('simplify').checked, document.getElementById('search').value.trim());
+          } catch (err) {
+            document.getElementById('placeholder').textContent = 'Parse error: ' + err.message;
+            document.getElementById('placeholder').style.display = 'block';
+            document.getElementById('treeRoot').style.display = 'none';
+          }
+        };
+        reader.readAsText(file);
+      }
+
+      document.getElementById('fileInput').addEventListener('change', function (e) {
+        const file = e.target.files[0];
+        if (file) loadASTFile(file);
+      });
+
+      const dropZone = document.getElementById('dropZone');
+      dropZone.addEventListener('dragover', function (e) { e.preventDefault(); dropZone.classList.add('drag-over'); });
+      dropZone.addEventListener('dragleave', function () { dropZone.classList.remove('drag-over'); });
+      dropZone.addEventListener('drop', function (e) {
+        e.preventDefault();
+        dropZone.classList.remove('drag-over');
+        const file = e.dataTransfer?.files?.[0];
+        if (file) loadASTFile(file);
+      });
+
+      document.getElementById('search').addEventListener('input', applyFilter);
+      document.getElementById('simplify').addEventListener('change', function () {
+        if (window._astRoot) renderTree(window._astRoot, this.checked, document.getElementById('search').value.trim());
+      });
+
+      document.getElementById('expandAll').addEventListener('click', function () {
+        document.querySelectorAll('.node-toggle.collapsed').forEach(t => {
+          t.classList.remove('collapsed');
+          t.closest('.node')?.querySelector('ul')?.classList?.remove('collapsed');
+        });
+        document.querySelectorAll('.tree ul').forEach(ul => ul.classList.remove('collapsed'));
+      });
+
+      document.getElementById('collapseAll').addEventListener('click', function () {
+        document.querySelectorAll('.node-toggle').forEach(t => {
+          const ul = t.closest('.node')?.querySelector('ul');
+          if (ul?.children?.length) {
+            t.classList.add('collapsed');
+            ul.classList.add('collapsed');
+          }
+        });
+      });
+
+      document.getElementById('prettyPrint').addEventListener('click', function () {
+        const root = window._astRoot;
+        const panel = document.getElementById('prettyPanel');
+        const content = document.getElementById('prettyContent');
+        if (!root) {
+          content.textContent = 'Load an AST file first.';
+          panel.classList.add('visible');
+          return;
+        }
+        const text = prettyPrintAST(root);
+        if (text) {
+          content.textContent = text;
+        } else {
+          const first = root.children[0];
+          const hint = first ? 'Root first child: type=' + first.type + ', children=' + (first.children && first.children.length) + (first.children && first.children.length ? ' [' + first.children.map(function (c) { return c.type; }).join(', ') + ']' : '') : 'no children';
+          content.textContent = '(no file content to pretty-print)\n\nDebug: ' + hint;
+        }
+        panel.classList.toggle('visible', true);
+      });
+
+      document.getElementById('copyPretty').addEventListener('click', function () {
+        const content = document.getElementById('prettyContent');
+        const text = content.textContent || '';
+        if (!text) return;
+        navigator.clipboard.writeText(text).then(function () {
+          const btn = document.getElementById('copyPretty');
+          const orig = btn.textContent;
+          btn.textContent = 'Copied!';
+          setTimeout(function () { btn.textContent = orig; }, 1500);
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
