@@ -2,6 +2,16 @@
 
 Parse the **Cangjie compiler’s AST dump** and convert it back to desugared Cangjie source.
 
+## AST Visualiser
+
+[![AST Visualiser](docs/ast-visualiser-screenshot.png)](https://pingshiyu.github.io/cangjie-ast-parser/ast-visualiser.html)
+
+**Click the image above to open the AST Visualiser** (or use this link: [https://pingshiyu.github.io/cangjie-ast-parser/ast-visualiser.html](https://pingshiyu.github.io/cangjie-ast-parser/ast-visualiser.html)).
+
+The visualiser lets you open an AST dump file, browse the tree (expand/collapse, filter by type or name), and pretty-print back to desugared Cangjie using the same logic as `run_ast_to_cangjie --no-comments`.
+
+**Run locally:** open `ast-visualiser.html` in your browser, then use “Open AST file” or drag and drop an AST `.txt` file (e.g. `run_AST/0_parse_ast.txt`).
+
 ## What file does it parse?
 
 It parses the **text-based AST representation** produced by the Cangjie compiler (`cjc`) when you pass **`--dump-ast`**.
@@ -74,6 +84,7 @@ source = ast_to_cangjie(root, include_comments=False)
 
 ## Project layout
 
+- **`ast-visualiser.html`** — Web-based AST viewer: open AST dumps, browse the tree, filter, and pretty-print to .cj (run_ast_to_cangjie --no-comments in the browser via Pyodide).
 - **`run_ast_to_cangjie.py`** — CLI entrypoint: reads an AST repr file and prints or writes desugared Cangjie.
 - **`ast_repr_parser/`** — Python package:
   - **`parser.py`** — Parses the indentation-based AST text into an `ASTNode` tree.
