@@ -183,7 +183,7 @@
   <div class="pretty-panel" id="prettyPanel">
     <div class="pretty-toolbar">
       <button type="button" class="btn" id="copyPretty">Copy</button>
-      <span class="node-meta" id="prettyHint">Approximate Cangjie source reconstructed from AST (may be incomplete).</span>
+      <span class="node-meta" id="prettyHint">Output from run_ast_to_cangjie with --no-comments (canonical desugared Cangjie).</span>
     </div>
     <pre class="pretty-content" id="prettyContent"></pre>
   </div>
@@ -665,7 +665,9 @@
         const reader = new FileReader();
         reader.onload = function () {
           try {
-            const root = parseAST(reader.result);
+            const rawText = reader.result;
+            window._astRawText = rawText;
+            const root = parseAST(rawText);
             window._astRoot = root;
             renderTree(root, document.getElementById('simplify').checked, document.getElementById('search').value.trim());
           } catch (err) {
@@ -717,22 +719,73 @@
 
       document.getElementById('prettyPrint').addEventListener('click', function () {
         const root = window._astRoot;
+        const rawText = window._astRawText;
         const panel = document.getElementById('prettyPanel');
         const content = document.getElementById('prettyContent');
-        if (!root) {
+        const hintEl = document.getElementById('prettyHint');
+        if (!root && !rawText) {
           content.textContent = 'Load an AST file first.';
+          hintEl.textContent = 'Output from run_ast_to_cangjie with --no-comments (canonical desugared Cangjie).';
           panel.classList.add('visible');
           return;
         }
-        const text = prettyPrintAST(root);
-        if (text) {
-          content.textContent = text;
-        } else {
-          const first = root.children[0];
-          const hint = first ? 'Root first child: type=' + first.type + ', children=' + (first.children && first.children.length) + (first.children && first.children.length ? ' [' + first.children.map(function (c) { return c.type; }).join(', ') + ']' : '') : 'no children';
-          content.textContent = '(no file content to pretty-print)\n\nDebug: ' + hint;
+        if (!rawText) {
+          const text = prettyPrintAST(root);
+          content.textContent = text || '(no file content to pretty-print)';
+          hintEl.textContent = 'Approximate Cangjie source (reload AST file for canonical run_ast_to_cangjie output).';
+          panel.classList.toggle('visible', true);
+          return;
         }
-        panel.classList.toggle('visible', true);
+        (async function () {
+          content.textContent = 'Loading Python runtime…';
+          hintEl.textContent = 'Output from run_ast_to_cangjie with --no-comments (canonical desugared Cangjie).';
+          panel.classList.add('visible');
+          try {
+            if (!window._pyodide) {
+              if (!window.loadPyodide) {
+                await new Promise(function (resolve, reject) {
+                  const s = document.createElement('script');
+                  s.src = 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js';
+                  s.crossOrigin = 'anonymous';
+                  s.onload = resolve;
+                  s.onerror = function () { reject(new Error('Failed to load Pyodide')); };
+                  document.head.appendChild(s);
+                });
+              }
+              window._pyodide = await window.loadPyodide({ fullStandardLibrary: true });
+            }
+            content.textContent = 'Converting AST to Cangjie (run_ast_to_cangjie --no-comments)…';
+            const base = new URL('.', location.href).href;
+            const pyodide = window._pyodide;
+            const fs = pyodide.FS;
+            try { fs.mkdir('/ast_repr_parser'); } catch (e) { /* exists */ }
+            var initPy = '# AST repr parser: parse Cangjie compiler AST text repr and emit desugared Cangjie.\n\nfrom .parser import parse_ast_repr, ASTNode\nfrom .codegen import ast_to_cangjie\n\n__all__ = ["parse_ast_repr", "ASTNode", "ast_to_cangjie"]';
+            fs.writeFile('/ast_repr_parser/__init__.py', initPy, { encoding: 'utf8' });
+            const modules = ['parser.py', 'codegen.py'];
+            for (const name of modules) {
+              const url = base + 'ast_repr_parser/' + name;
+              const res = await fetch(url);
+              if (!res.ok) throw new Error('Failed to load ' + name + ': ' + res.status);
+              const code = await res.text();
+              fs.writeFile('/ast_repr_parser/' + name, code, { encoding: 'utf8' });
+            }
+            fs.writeFile('/tmp/ast.txt', rawText, { encoding: 'utf8' });
+            pyodide.runPython('import sys\nsys.path.insert(0, "/")');
+            const result = pyodide.runPython(
+              'from ast_repr_parser import parse_ast_repr, ast_to_cangjie\n'
+              + 'root = parse_ast_repr("/tmp/ast.txt")\n'
+              + 'ast_to_cangjie(root, include_comments=False)'
+            );
+            content.textContent = result !== undefined && result !== null ? String(result) : '';
+          } catch (err) {
+            const fallback = prettyPrintAST(root);
+            content.textContent = fallback
+              ? fallback + '\n\n/* Fallback (approximate) used: ' + err.message + ' */'
+              : 'Error: ' + err.message + (root ? '\n\n(No JS fallback content.)' : '');
+            hintEl.textContent = 'Approximate output (run_ast_to_cangjie failed: ' + err.message + ').';
+          }
+          panel.classList.toggle('visible', true);
+        })();
       });
 
       document.getElementById('copyPretty').addEventListener('click', function () {
