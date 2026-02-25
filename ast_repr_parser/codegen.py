@@ -505,9 +505,9 @@ def _emit_func_decl(node: ASTNode, indent: str) -> str:
                 if fb.type == "Block":
                     body = _emit_block_body(fb, indent + "    ")
                     param_str = ", ".join(params)
-                    return pos + indent + f"func {name}({param_str}) -> {ret_type} {{\n{body}\n{indent}}}\n"
+                    return pos + indent + f"func {name}({param_str}): {ret_type} {{\n{body}\n{indent}}}\n"
     param_str = ", ".join(params)
-    return pos + indent + f"func {name}({param_str}) -> {ret_type} {{\n{indent}}}\n"
+    return pos + indent + f"func {name}({param_str}): {ret_type} {{\n{indent}}}\n"
 
 
 def _emit_main(node: ASTNode) -> str:
