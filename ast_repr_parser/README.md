@@ -11,8 +11,8 @@ root = parse_ast_repr("path/to/desugared-ast-repr.txt")
 cangjie_source = ast_to_cangjie(root)
 print(cangjie_source)
 
-# Preserve original identifier spelling
-cangjie_source = ast_to_cangjie(root, sanitize_identifiers=False)
+# Enable round-trip lowering
+cangjie_source = ast_to_cangjie(root, sanitize_identifiers=True, round_trip=True)
 ```
 
 ## Command line

@@ -21,6 +21,7 @@ KNOWN_NODE_TYPES = {
 # Set by ast_to_cangjie(..., include_comments=...) so all emitters can skip position comments
 _INCLUDE_COMMENTS = True
 _SANITIZE_IDENTIFIERS = True
+_ROUND_TRIP = False
 
 
 def _reindent(s: str, base_indent: str) -> str:
@@ -127,6 +128,8 @@ def _emit_expr(node: ASTNode, indent: str) -> str:
         for c in node.children:
             parts.append(_emit_stmt(c, indent + "    "))
         body = "\n".join(parts) if parts else ""
+        if _ROUND_TRIP:
+            return pos + indent + "{ =>\n" + body + "\n" + indent + "}()"
         return pos + indent + "{\n" + body + "\n" + indent + "}"
     if node.type == "AssignExpr":
         left = ""
@@ -441,22 +444,27 @@ def ast_to_cangjie(
     root: ASTNode,
     include_comments: bool = True,
     sanitize_identifiers: bool = False,
+    round_trip: bool = False,
 ) -> str:
     """Convert parsed AST to desugared Cangjie source.
 
     Set include_comments=False to omit position comments.
     Set sanitize_identifiers=True to allow identifiers to be parsed by cjc.
+    Set round_trip=True to emit block expressions as `{ => ... }()`.
     """
-    global _INCLUDE_COMMENTS, _SANITIZE_IDENTIFIERS
+    global _INCLUDE_COMMENTS, _SANITIZE_IDENTIFIERS, _ROUND_TRIP
     prev = _INCLUDE_COMMENTS
     prev_sanitize = _SANITIZE_IDENTIFIERS
+    prev_round_trip = _ROUND_TRIP
     _INCLUDE_COMMENTS = include_comments
     _SANITIZE_IDENTIFIERS = sanitize_identifiers
+    _ROUND_TRIP = round_trip
     try:
         return _ast_to_cangjie_impl(root)
     finally:
         _INCLUDE_COMMENTS = prev
         _SANITIZE_IDENTIFIERS = prev_sanitize
+        _ROUND_TRIP = prev_round_trip
 
 
 def _ast_to_cangjie_impl(root: ASTNode) -> str:

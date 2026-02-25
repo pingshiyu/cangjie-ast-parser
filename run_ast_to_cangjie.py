@@ -30,9 +30,9 @@ def main():
         help="Omit position comments (// position: ...) from the output",
     )
     parser.add_argument(
-        "--sanitize-identifiers",
+        "--round-trip",
         action="store_true",
-        help="Sanitize identifiers by replacing '-' with '__' and '$' with 'dollar_'",
+        help="Round-trip identifier spelling by replacing '-' with '__' and '$' with 'dollar_'",
     )
     parser.add_argument(
         "-o", "--output",
@@ -47,7 +47,8 @@ def main():
     out = ast_to_cangjie(
         root,
         include_comments=not args.no_comments,
-        sanitize_identifiers=args.sanitize_identifiers,
+        sanitize_identifiers=args.round_trip,
+        round_trip=args.round_trip,
     )
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
