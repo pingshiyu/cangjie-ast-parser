@@ -53,10 +53,9 @@ def _sanitize_identifier(name: str) -> str:
 def _emit_type(node: ASTNode) -> str:
     """Emit type from RefType or PrimitiveType node."""
     if node.type == "PrimitiveType":
-        return _sanitize_identifier(node.name or node.props.get("ty", "Unknown"))
+        return node.name or node.props.get("ty", "Unknown")
     if node.type == "RefType":
-        name = node.name.strip() if node.name else node.props.get("ty", "").split("-")[-1].split("<")[0]
-        name = _sanitize_identifier(name)
+        name = node.name.strip() if node.name else node.props.get("ty", "").split("<")[0]
         args = node.list_props.get("typeArguments", [])
         if args:
             arg_strs = []
@@ -324,11 +323,14 @@ def _emit_stmt(node: ASTNode, indent: str) -> str:
                 if c.type == "RefType" or c.type == "PrimitiveType":
                     type_str = _emit_type(c)
                     break
+        if not type_str:
+            raw_ty = (node.props.get("ty") or "Unknown").strip()
+            type_str = raw_ty if raw_ty else "Unknown"
         if not init_node:
-            return pos + indent + name
+            return pos + indent + f"{name}: {type_str}"
         # Emit initializer at same indent level so Block/Lambda content gets indent+4 from block
         init_str = _emit_expr(init_node, indent).strip()
-        eq_part = f"{name} : {type_str} = " if type_str else f"{name} = "
+        eq_part = f"{name}: {type_str} = "
         if "\n" not in init_str:
             return pos + indent + eq_part + init_str
         # Multi-line: first line after "=", rest unchanged (already correctly indented)
@@ -360,7 +362,7 @@ def _get_match_pattern(match_case_node: ASTNode) -> str:
         if c.type == "WildcardPattern":
             return _sanitize_identifier((c.name or "_").strip())
         if c.type == "TypePattern":
-            type_str = _sanitize_identifier((c.props.get("ty") or "Unknown").split("-")[-1].split("<")[0])
+            type_str = (c.props.get("ty") or "Unknown").split("<")[0]
             var_name = "_"
             for child in c.children:
                 if child.type == "VarPattern":
@@ -373,7 +375,7 @@ def _get_match_pattern(match_case_node: ASTNode) -> str:
         if c.type == "WildcardPattern":
             return _sanitize_identifier((c.name or "_").strip())
         if c.type == "TypePattern":
-            type_str = _sanitize_identifier((c.props.get("ty") or "Unknown").split("-")[-1].split("<")[0])
+            type_str = (c.props.get("ty") or "Unknown").split("<")[0]
             var_name = "_"
             for child in c.children:
                 if child.type == "VarPattern":
@@ -415,9 +417,9 @@ def _get_catch_pattern(catch_node: ASTNode) -> tuple:
                 if child.type == "VarPattern":
                     var_name = _sanitize_identifier((child.name or "").strip()) or "_"
                 if child.type == "RefType":
-                    except_type = _sanitize_identifier((child.name or "").strip())
+                    except_type = (child.name or "").strip()
                     if not except_type:
-                        except_type = _sanitize_identifier((child.props.get("ty") or "Unknown").split("-")[-1].split("<")[0])
+                        except_type = (child.props.get("ty") or "Unknown").split("<")[0]
             return (var_name or "_", except_type or "Unknown")
     return (None, None)
 
@@ -530,7 +532,7 @@ def _emit_func_decl(node: ASTNode, indent: str) -> str:
                     ret_type = _emit_type(fb)
             for fb in c.children:
                 if fb.type == "RefType" and not fb.name:
-                    ret_type = _sanitize_identifier(fb.props.get("ty", ret_type).split("-")[-1])
+                    ret_type = fb.props.get("ty", ret_type)
                 if fb.type == "Block":
                     body = _emit_block_body(fb, indent + "    ")
                     param_str = ", ".join(params)

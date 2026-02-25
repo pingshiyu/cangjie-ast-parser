@@ -8,6 +8,11 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 
+_TYPE_TAG_PREFIX_RE = re.compile(
+    r"\b(?:Class|Enum|Interface|Generics|Primitive|Struct|Trait|TypeAlias|Alias|Module|Package)-"
+)
+
+
 @dataclass
 class ASTNode:
     """A node in the parsed AST. type and name identify the node; props hold key-value metadata; children are nested nodes."""
@@ -90,6 +95,11 @@ def _parse_line(line: str) -> tuple:
         value = stripped[idx+2:].strip()
         return ("kv", key, value)
     return ("comment",)
+
+
+def _normalize_type_expr(type_expr: str) -> str:
+    """Normalize compiler-tagged type expressions, preserving function arrows."""
+    return _TYPE_TAG_PREFIX_RE.sub("", type_expr)
 
 
 class LineReader:
@@ -182,7 +192,10 @@ def _parse_node_content(reader: LineReader, node: ASTNode) -> None:
                 reader.consume()
             continue
         if kind[0] == "kv":
-            node.props[kind[1]] = kind[2]
+            key, value = kind[1], kind[2]
+            if key == "ty":
+                value = _normalize_type_expr(value)
+            node.props[key] = value
             continue
         if kind[0] == "node":
             child = _make_node(kind[1], kind[2])
