@@ -36,6 +36,9 @@ python3 run_ast_to_cangjie.py path/to/ast-dump.txt -o output.cj
 
 # Omit position comments (// position: ...) from the output
 python3 run_ast_to_cangjie.py path/to/ast-dump.txt --no-comments
+
+# Sanitize identifiers ('-' -> '__', '$' -> 'dollar_')
+python3 run_ast_to_cangjie.py path/to/ast-dump.txt --sanitize-identifiers
 ```
 
 **Options:**
@@ -45,6 +48,7 @@ python3 run_ast_to_cangjie.py path/to/ast-dump.txt --no-comments
 | `input` | Path to the AST repr file (optional; default: `desugared-ast-repr.txt` in this directory). |
 | `-o`, `--output FILE` | Write desugared Cangjie to `FILE` instead of stdout. |
 | `--no-comments` | Do not emit position comments in the output. |
+| `--sanitize-identifiers` | Replace `-` with `__` and `$` with `dollar_` in emitted identifiers. |
 
 ## Using as a library
 
@@ -60,10 +64,13 @@ print(source)
 
 # Without position comments
 source = ast_to_cangjie(root, include_comments=False)
+
+# Preserve original identifier spelling
+source = ast_to_cangjie(root, sanitize_identifiers=False)
 ```
 
 - **`parse_ast_repr(path)`** — Reads the file at `path` and returns the root `ASTNode` of the parsed tree.
-- **`ast_to_cangjie(root, include_comments=True)`** — Converts the parsed AST back to desugared Cangjie source.
+- **`ast_to_cangjie(root, include_comments=True, sanitize_identifiers=True)`** — Converts the parsed AST back to desugared Cangjie source.
 
 ## Behaviour
 

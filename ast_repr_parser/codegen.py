@@ -20,6 +20,7 @@ KNOWN_NODE_TYPES = {
 
 # Set by ast_to_cangjie(..., include_comments=...) so all emitters can skip position comments
 _INCLUDE_COMMENTS = True
+_SANITIZE_IDENTIFIERS = True
 
 
 def _reindent(s: str, base_indent: str) -> str:
@@ -43,12 +44,19 @@ def _position_comment(node: ASTNode) -> str:
     return ""
 
 
+def _sanitize_identifier(name: str) -> str:
+    if not _SANITIZE_IDENTIFIERS:
+        return name
+    return name.replace("-", "__").replace("$", "dollar_")
+
+
 def _emit_type(node: ASTNode) -> str:
     """Emit type from RefType or PrimitiveType node."""
     if node.type == "PrimitiveType":
-        return node.name or node.props.get("ty", "Unknown")
+        return _sanitize_identifier(node.name or node.props.get("ty", "Unknown"))
     if node.type == "RefType":
         name = node.name.strip() if node.name else node.props.get("ty", "").split("-")[-1].split("<")[0]
+        name = _sanitize_identifier(name)
         args = node.list_props.get("typeArguments", [])
         if args:
             arg_strs = []
@@ -66,7 +74,7 @@ def _emit_expr(node: ASTNode, indent: str) -> str:
     """Emit expression node to Cangjie."""
     pos = _position_comment(node)
     if node.type == "RefExpr":
-        name = node.name.strip() if node.name else "?"
+        name = _sanitize_identifier(node.name.strip()) if node.name else "?"
         return pos + indent + name
     if node.type == "LitConstExpr":
         # LitConstExpr: String "..." or Integer "0" or Unit "()"
@@ -264,7 +272,7 @@ def _emit_expr(node: ASTNode, indent: str) -> str:
 def _emit_base_func(node: ASTNode, indent: str) -> str:
     for c in node.children:
         if c.type == "RefExpr":
-            return (c.name or "?").strip()
+            return _sanitize_identifier((c.name or "?").strip())
         if c.type == "MemberAccess":
             return _emit_member_access(c, "")
     return "?"
@@ -272,7 +280,7 @@ def _emit_base_func(node: ASTNode, indent: str) -> str:
 
 def _emit_member_access(node: ASTNode, indent: str) -> str:
     base = ""
-    field = node.props.get("field", "")
+    field = _sanitize_identifier(node.props.get("field", ""))
     for c in node.children:
         if c.type in ("RefExpr", "CallExpr", "MemberAccess"):
             base = _emit_expr(c, "").strip()
@@ -291,9 +299,11 @@ def _emit_stmt(node: ASTNode, indent: str) -> str:
     """Emit a statement (VarDecl, CallExpr, etc.)."""
     pos = _position_comment(node)
     if node.type == "VarDecl":
-        name = (node.name or "").strip()
-        if not name.startswith("let "):
-            name = "let " + name if name else "let _"
+        raw_name = (node.name or "").strip()
+        has_let = raw_name.startswith("let ")
+        ident = raw_name[4:].strip() if has_let else raw_name
+        ident = _sanitize_identifier(ident) if ident else "_"
+        name = f"let {ident}"
         type_str = ""
         init_node = None
         for c in node.children:
@@ -341,26 +351,26 @@ def _get_match_pattern(match_case_node: ASTNode) -> str:
             pattern_nodes = c.children
             break
         if c.type == "WildcardPattern":
-            return (c.name or "_").strip()
+            return _sanitize_identifier((c.name or "_").strip())
         if c.type == "TypePattern":
-            type_str = (c.props.get("ty") or "Unknown").split("-")[-1].split("<")[0]
+            type_str = _sanitize_identifier((c.props.get("ty") or "Unknown").split("-")[-1].split("<")[0])
             var_name = "_"
             for child in c.children:
                 if child.type == "VarPattern":
-                    var_name = (child.name or "_").strip()
+                    var_name = _sanitize_identifier((child.name or "_").strip())
                     break
             return f"{var_name}: {type_str}"
     if patterns_node and patterns_node.props.get("WildcardPattern") is not None:
         return (patterns_node.props.get("WildcardPattern") or "_").strip()
     for c in pattern_nodes:
         if c.type == "WildcardPattern":
-            return (c.name or "_").strip()
+            return _sanitize_identifier((c.name or "_").strip())
         if c.type == "TypePattern":
-            type_str = (c.props.get("ty") or "Unknown").split("-")[-1].split("<")[0]
+            type_str = _sanitize_identifier((c.props.get("ty") or "Unknown").split("-")[-1].split("<")[0])
             var_name = "_"
             for child in c.children:
                 if child.type == "VarPattern":
-                    var_name = (child.name or "_").strip()
+                    var_name = _sanitize_identifier((child.name or "_").strip())
                     break
             return f"{var_name}: {type_str}"
     return "?"
@@ -396,11 +406,11 @@ def _get_catch_pattern(catch_node: ASTNode) -> tuple:
             except_type = None
             for child in ep.children:
                 if child.type == "VarPattern":
-                    var_name = (child.name or "").strip() or "_"
+                    var_name = _sanitize_identifier((child.name or "").strip()) or "_"
                 if child.type == "RefType":
-                    except_type = (child.name or "").strip()
+                    except_type = _sanitize_identifier((child.name or "").strip())
                     if not except_type:
-                        except_type = (child.props.get("ty") or "Unknown").split("-")[-1].split("<")[0]
+                        except_type = _sanitize_identifier((child.props.get("ty") or "Unknown").split("-")[-1].split("<")[0])
             return (var_name or "_", except_type or "Unknown")
     return (None, None)
 
@@ -418,15 +428,26 @@ def _emit_catch(node: ASTNode, indent: str) -> str:
     return f" catch {{\n{block}\n{indent}}}"
 
 
-def ast_to_cangjie(root: ASTNode, include_comments: bool = True) -> str:
-    """Convert parsed AST to desugared Cangjie source. Set include_comments=False to omit position comments."""
-    global _INCLUDE_COMMENTS
+def ast_to_cangjie(
+    root: ASTNode,
+    include_comments: bool = True,
+    sanitize_identifiers: bool = False,
+) -> str:
+    """Convert parsed AST to desugared Cangjie source.
+
+    Set include_comments=False to omit position comments.
+    Set sanitize_identifiers=True to allow identifiers to be parsed by cjc.
+    """
+    global _INCLUDE_COMMENTS, _SANITIZE_IDENTIFIERS
     prev = _INCLUDE_COMMENTS
+    prev_sanitize = _SANITIZE_IDENTIFIERS
     _INCLUDE_COMMENTS = include_comments
+    _SANITIZE_IDENTIFIERS = sanitize_identifiers
     try:
         return _ast_to_cangjie_impl(root)
     finally:
         _INCLUDE_COMMENTS = prev
+        _SANITIZE_IDENTIFIERS = prev_sanitize
 
 
 def _ast_to_cangjie_impl(root: ASTNode) -> str:
@@ -457,7 +478,7 @@ def _ast_to_cangjie_impl(root: ASTNode) -> str:
 
 def _emit_class(node: ASTNode) -> str:
     pos = _position_comment(node)
-    name = (node.name or "").strip()
+    name = _sanitize_identifier((node.name or "").strip())
     inherited = node.list_props.get("inheritedTypes", [])
     base_str = ""
     if inherited:
@@ -479,7 +500,7 @@ def _emit_class(node: ASTNode) -> str:
 
 def _emit_func_decl(node: ASTNode, indent: str) -> str:
     pos = _position_comment(node)
-    name = (node.name or "").strip()
+    name = _sanitize_identifier((node.name or "").strip())
     if " " in name and "(" in name:
         name = name.split("(")[0].strip()
     is_init = name == "init"
@@ -491,7 +512,7 @@ def _emit_func_decl(node: ASTNode, indent: str) -> str:
                 if fb.type == "FuncParamList":
                     for p in fb.children:
                         if p.type == "FuncParam":
-                            pname = (p.name or "_").strip()
+                            pname = _sanitize_identifier((p.name or "_").strip())
                             pt = "Unknown"
                             for tc in p.children:
                                 if tc.type in ("RefType", "PrimitiveType"):
@@ -502,7 +523,7 @@ def _emit_func_decl(node: ASTNode, indent: str) -> str:
                     ret_type = _emit_type(fb)
             for fb in c.children:
                 if fb.type == "RefType" and not fb.name:
-                    ret_type = fb.props.get("ty", ret_type).split("-")[-1]
+                    ret_type = _sanitize_identifier(fb.props.get("ty", ret_type).split("-")[-1])
                 if fb.type == "Block":
                     body = _emit_block_body(fb, indent + "    ")
                     param_str = ", ".join(params)
