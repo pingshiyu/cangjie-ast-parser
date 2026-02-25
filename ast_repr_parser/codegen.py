@@ -317,9 +317,8 @@ def _emit_stmt(node: ASTNode, indent: str) -> str:
         for c in node.children:
             if c.type == "RefType" or c.type == "PrimitiveType":
                 type_str = _emit_type(c)
-            if c.type in ("CallExpr", "RefExpr", "Block", "LambdaExpr", "MatchExpr"):
+            elif init_node is None:
                 init_node = c
-                break
         if not type_str:
             for c in node.children:
                 if c.type == "RefType" or c.type == "PrimitiveType":
