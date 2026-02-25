@@ -101,6 +101,8 @@ def _emit_expr(node: ASTNode, indent: str) -> str:
                 if c.type == "MemberAccess":
                     base = _emit_member_access(c, indent)
                     break
+        if base.endswith(".init"):
+            base = base[:-5]
         arg_strs = []
         for fa in args_list:
             if isinstance(fa, ASTNode):
@@ -169,18 +171,18 @@ def _emit_expr(node: ASTNode, indent: str) -> str:
                     cond = _emit_expr(c, "").strip()
             if c.type == "Block":
                 if not then_b:
-                    then_b = _emit_expr(c, indent + "    ")
+                    then_b = _emit_brace_body(c, indent + "    ")
                 else:
-                    else_b = _emit_expr(c, indent + "    ")
+                    else_b = _emit_brace_body(c, indent + "    ")
         # Heuristic: first non-Block is cond, then Block then Block
         non_block = [c for c in node.children if c.type != "Block"]
         blocks = [c for c in node.children if c.type == "Block"]
         if non_block:
             cond = _emit_expr(non_block[0], "").strip()
         if len(blocks) >= 1:
-            then_b = _emit_expr(blocks[0], indent + "    ")
+            then_b = _emit_brace_body(blocks[0], indent + "    ")
         if len(blocks) >= 2:
-            else_b = _emit_expr(blocks[1], indent + "    ")
+            else_b = _emit_brace_body(blocks[1], indent + "    ")
         if not cond:
             cond = "true"
         out = pos + indent + f"if ({cond}) {{\n{then_b}\n{indent}}}"
@@ -244,9 +246,9 @@ def _emit_expr(node: ASTNode, indent: str) -> str:
         body = ""
         for c in body_node.children:
             if c.type == "Block":
-                body = _emit_block_body(c, indent + "    ")
+                body = _emit_brace_body(c, indent + "    ")
                 break
-        return pos + indent + f"{{ {', '.join(param_strs)} => {{\n{body}\n{indent}}}\n{indent}}}"
+        return pos + indent + f"{{ {', '.join(param_strs)} =>\n{body}\n{indent}}}"
     if node.type == "TryExpr":
         try_block = ""
         catches = []
@@ -293,6 +295,12 @@ def _emit_block_body(block_node: ASTNode, indent: str) -> str:
     for c in block_node.children:
         parts.append(_emit_stmt(c, indent))
     return "\n".join(parts)
+
+
+def _emit_brace_body(block_node: ASTNode, indent: str) -> str:
+    if len(block_node.children) == 1 and block_node.children[0].type == "Block":
+        return _emit_block_body(block_node.children[0], indent)
+    return _emit_block_body(block_node, indent)
 
 
 def _emit_stmt(node: ASTNode, indent: str) -> str:
@@ -389,9 +397,9 @@ def _emit_match_case(node: ASTNode, indent: str) -> str:
     else:
         for c in node.children:
             if c.type == "Block":
-                body = _emit_block_body(c, indent + "    ")
+                body = _emit_brace_body(c, indent + "    ")
                 break
-    return indent + f"case {pat} => {{\n{body}\n{indent}}}"
+    return indent + f"case {pat} =>\n{body}"
 
 
 def _get_catch_pattern(catch_node: ASTNode) -> tuple:
