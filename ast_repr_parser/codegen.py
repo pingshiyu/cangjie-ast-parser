@@ -20,6 +20,8 @@ KNOWN_NODE_TYPES = {
 
 # Set by ast_to_cangjie(..., include_comments=...) so all emitters can skip position comments
 _INCLUDE_COMMENTS = True
+_SANITIZE_IDENTIFIERS = True
+_ROUND_TRIP = False
 
 
 def _reindent(s: str, base_indent: str) -> str:
@@ -43,12 +45,18 @@ def _position_comment(node: ASTNode) -> str:
     return ""
 
 
+def _sanitize_identifier(name: str) -> str:
+    if not _SANITIZE_IDENTIFIERS:
+        return name
+    return name.replace("-", "__").replace("$", "dollar_")
+
+
 def _emit_type(node: ASTNode) -> str:
     """Emit type from RefType or PrimitiveType node."""
     if node.type == "PrimitiveType":
         return node.name or node.props.get("ty", "Unknown")
     if node.type == "RefType":
-        name = node.name.strip() if node.name else node.props.get("ty", "").split("-")[-1].split("<")[0]
+        name = node.name.strip() if node.name else node.props.get("ty", "").split("<")[0]
         args = node.list_props.get("typeArguments", [])
         if args:
             arg_strs = []
@@ -66,28 +74,21 @@ def _emit_expr(node: ASTNode, indent: str) -> str:
     """Emit expression node to Cangjie."""
     pos = _position_comment(node)
     if node.type == "RefExpr":
-        name = node.name.strip() if node.name else "?"
+        name = _sanitize_identifier(node.name.strip()) if node.name else "?"
         return pos + indent + name
     if node.type == "LitConstExpr":
         # LitConstExpr: String "..." or Integer "0" or Unit "()"
-        kind = node.props.get("ty", "")
+        kind = (node.name or node.props.get("ty", "")).strip()
+        value = (node.value or "").strip()
         if "String" in kind or "string" in kind:
-            raw = (node.name or "").strip()
-            if raw.startswith('"') and raw.endswith('"') and raw.count('"') == 2:
-                return pos + indent + raw
-            # e.g. 'String "got here 2"' -> extract quoted part
-            if '"' in raw:
-                i, j = raw.find('"'), raw.rfind('"')
-                if i != -1 and j != -1 and j > i:
-                    return pos + indent + raw[i : j + 1]
-            return pos + indent + f'"{raw}"' if raw else '""'
+            return pos + indent + (f'"{value}"' if value else '""')
         if "Integer" in kind or "Int" in kind:
-            return pos + indent + (node.name.strip() if node.name else "0")
+            return pos + indent + (value if value else "0")
         if "Bool" in kind:
-            return pos + indent + (node.name.strip() if node.name else "false")
+            return pos + indent + (value if value else "false")
         if "Unit" in kind:
-            return pos + indent + "()"
-        return pos + indent + (node.name.strip() if node.name else "()")
+            return pos + indent + (value if value else "()")
+        return pos + indent + (value if value else "()")
     if node.type == "CallExpr":
         base = ""
         args_list = node.list_props.get("arguments", [])
@@ -100,6 +101,8 @@ def _emit_expr(node: ASTNode, indent: str) -> str:
                 if c.type == "MemberAccess":
                     base = _emit_member_access(c, indent)
                     break
+        if base.endswith(".init"):
+            base = base[:-5]
         arg_strs = []
         for fa in args_list:
             if isinstance(fa, ASTNode):
@@ -125,6 +128,8 @@ def _emit_expr(node: ASTNode, indent: str) -> str:
         for c in node.children:
             parts.append(_emit_stmt(c, indent + "    "))
         body = "\n".join(parts) if parts else ""
+        if _ROUND_TRIP:
+            return pos + indent + "{ =>\n" + body + "\n" + indent + "}()"
         return pos + indent + "{\n" + body + "\n" + indent + "}"
     if node.type == "AssignExpr":
         left = ""
@@ -168,18 +173,18 @@ def _emit_expr(node: ASTNode, indent: str) -> str:
                     cond = _emit_expr(c, "").strip()
             if c.type == "Block":
                 if not then_b:
-                    then_b = _emit_expr(c, indent + "    ")
+                    then_b = _emit_brace_body(c, indent + "    ")
                 else:
-                    else_b = _emit_expr(c, indent + "    ")
+                    else_b = _emit_brace_body(c, indent + "    ")
         # Heuristic: first non-Block is cond, then Block then Block
         non_block = [c for c in node.children if c.type != "Block"]
         blocks = [c for c in node.children if c.type == "Block"]
         if non_block:
             cond = _emit_expr(non_block[0], "").strip()
         if len(blocks) >= 1:
-            then_b = _emit_expr(blocks[0], indent + "    ")
+            then_b = _emit_brace_body(blocks[0], indent + "    ")
         if len(blocks) >= 2:
-            else_b = _emit_expr(blocks[1], indent + "    ")
+            else_b = _emit_brace_body(blocks[1], indent + "    ")
         if not cond:
             cond = "true"
         out = pos + indent + f"if ({cond}) {{\n{then_b}\n{indent}}}"
@@ -189,7 +194,12 @@ def _emit_expr(node: ASTNode, indent: str) -> str:
     if node.type == "MatchExpr":
         sel = ""
         for c in node.children:
-            if c.type != "MatchCase" and "selector" not in str(c.props):
+            if c.type == "selector":
+                if c.children:
+                    sel = _emit_expr(c.children[0], "").strip()
+                    break
+                continue
+            if c.type not in ("MatchCase", "patterns"):
                 sel = _emit_expr(c, "").strip()
                 break
         sel_node = node.props.get("selector")
@@ -238,9 +248,9 @@ def _emit_expr(node: ASTNode, indent: str) -> str:
         body = ""
         for c in body_node.children:
             if c.type == "Block":
-                body = _emit_block_body(c, indent + "    ")
+                body = _emit_brace_body(c, indent + "    ")
                 break
-        return pos + indent + f"{{ ({', '.join(param_strs)}) => {{\n{body}\n{indent}}}\n{indent}}}"
+        return pos + indent + f"{{ {', '.join(param_strs)} =>\n{body}\n{indent}}}"
     if node.type == "TryExpr":
         try_block = ""
         catches = []
@@ -266,7 +276,7 @@ def _emit_expr(node: ASTNode, indent: str) -> str:
 def _emit_base_func(node: ASTNode, indent: str) -> str:
     for c in node.children:
         if c.type == "RefExpr":
-            return (c.name or "?").strip()
+            return _sanitize_identifier((c.name or "?").strip())
         if c.type == "MemberAccess":
             return _emit_member_access(c, "")
     return "?"
@@ -274,7 +284,7 @@ def _emit_base_func(node: ASTNode, indent: str) -> str:
 
 def _emit_member_access(node: ASTNode, indent: str) -> str:
     base = ""
-    field = node.props.get("field", "")
+    field = _sanitize_identifier(node.props.get("field", ""))
     for c in node.children:
         if c.type in ("RefExpr", "CallExpr", "MemberAccess"):
             base = _emit_expr(c, "").strip()
@@ -289,31 +299,41 @@ def _emit_block_body(block_node: ASTNode, indent: str) -> str:
     return "\n".join(parts)
 
 
+def _emit_brace_body(block_node: ASTNode, indent: str) -> str:
+    if len(block_node.children) == 1 and block_node.children[0].type == "Block":
+        return _emit_block_body(block_node.children[0], indent)
+    return _emit_block_body(block_node, indent)
+
+
 def _emit_stmt(node: ASTNode, indent: str) -> str:
     """Emit a statement (VarDecl, CallExpr, etc.)."""
     pos = _position_comment(node)
     if node.type == "VarDecl":
-        name = (node.name or "").strip()
-        if not name.startswith("let "):
-            name = "let " + name if name else "let _"
+        raw_name = (node.name or "").strip()
+        has_let = raw_name.startswith("let ")
+        ident = raw_name[4:].strip() if has_let else raw_name
+        ident = _sanitize_identifier(ident) if ident else "_"
+        name = f"let {ident}"
         type_str = ""
         init_node = None
         for c in node.children:
             if c.type == "RefType" or c.type == "PrimitiveType":
                 type_str = _emit_type(c)
-            if c.type in ("CallExpr", "RefExpr", "Block", "LambdaExpr", "MatchExpr"):
+            elif init_node is None:
                 init_node = c
-                break
         if not type_str:
             for c in node.children:
                 if c.type == "RefType" or c.type == "PrimitiveType":
                     type_str = _emit_type(c)
                     break
+        if not type_str:
+            raw_ty = (node.props.get("ty") or "Unknown").strip()
+            type_str = raw_ty if raw_ty else "Unknown"
         if not init_node:
-            return pos + indent + name
+            return pos + indent + f"{name}: {type_str}"
         # Emit initializer at same indent level so Block/Lambda content gets indent+4 from block
         init_str = _emit_expr(init_node, indent).strip()
-        eq_part = f"{name} : {type_str} = " if type_str else f"{name} = "
+        eq_part = f"{name}: {type_str} = "
         if "\n" not in init_str:
             return pos + indent + eq_part + init_str
         # Multi-line: first line after "=", rest unchanged (already correctly indented)
@@ -343,26 +363,26 @@ def _get_match_pattern(match_case_node: ASTNode) -> str:
             pattern_nodes = c.children
             break
         if c.type == "WildcardPattern":
-            return (c.name or "_").strip()
+            return _sanitize_identifier((c.name or "_").strip())
         if c.type == "TypePattern":
-            type_str = (c.props.get("ty") or "Unknown").split("-")[-1].split("<")[0]
+            type_str = (c.props.get("ty") or "Unknown").split("<")[0]
             var_name = "_"
             for child in c.children:
                 if child.type == "VarPattern":
-                    var_name = (child.name or "_").strip()
+                    var_name = _sanitize_identifier((child.name or "_").strip())
                     break
             return f"{var_name}: {type_str}"
     if patterns_node and patterns_node.props.get("WildcardPattern") is not None:
         return (patterns_node.props.get("WildcardPattern") or "_").strip()
     for c in pattern_nodes:
         if c.type == "WildcardPattern":
-            return (c.name or "_").strip()
+            return _sanitize_identifier((c.name or "_").strip())
         if c.type == "TypePattern":
-            type_str = (c.props.get("ty") or "Unknown").split("-")[-1].split("<")[0]
+            type_str = (c.props.get("ty") or "Unknown").split("<")[0]
             var_name = "_"
             for child in c.children:
                 if child.type == "VarPattern":
-                    var_name = (child.name or "_").strip()
+                    var_name = _sanitize_identifier((child.name or "_").strip())
                     break
             return f"{var_name}: {type_str}"
     return "?"
@@ -381,9 +401,9 @@ def _emit_match_case(node: ASTNode, indent: str) -> str:
     else:
         for c in node.children:
             if c.type == "Block":
-                body = _emit_block_body(c, indent + "    ")
+                body = _emit_brace_body(c, indent + "    ")
                 break
-    return indent + f"{pat} => {{\n{body}\n{indent}}}"
+    return indent + f"case {pat} =>\n{body}"
 
 
 def _get_catch_pattern(catch_node: ASTNode) -> tuple:
@@ -398,11 +418,11 @@ def _get_catch_pattern(catch_node: ASTNode) -> tuple:
             except_type = None
             for child in ep.children:
                 if child.type == "VarPattern":
-                    var_name = (child.name or "").strip() or "_"
+                    var_name = _sanitize_identifier((child.name or "").strip()) or "_"
                 if child.type == "RefType":
                     except_type = (child.name or "").strip()
                     if not except_type:
-                        except_type = (child.props.get("ty") or "Unknown").split("-")[-1].split("<")[0]
+                        except_type = (child.props.get("ty") or "Unknown").split("<")[0]
             return (var_name or "_", except_type or "Unknown")
     return (None, None)
 
@@ -420,15 +440,31 @@ def _emit_catch(node: ASTNode, indent: str) -> str:
     return f" catch {{\n{block}\n{indent}}}"
 
 
-def ast_to_cangjie(root: ASTNode, include_comments: bool = True) -> str:
-    """Convert parsed AST to desugared Cangjie source. Set include_comments=False to omit position comments."""
-    global _INCLUDE_COMMENTS
+def ast_to_cangjie(
+    root: ASTNode,
+    include_comments: bool = True,
+    sanitize_identifiers: bool = False,
+    round_trip: bool = False,
+) -> str:
+    """Convert parsed AST to desugared Cangjie source.
+
+    Set include_comments=False to omit position comments.
+    Set sanitize_identifiers=True to allow identifiers to be parsed by cjc.
+    Set round_trip=True to emit block expressions as `{ => ... }()`.
+    """
+    global _INCLUDE_COMMENTS, _SANITIZE_IDENTIFIERS, _ROUND_TRIP
     prev = _INCLUDE_COMMENTS
+    prev_sanitize = _SANITIZE_IDENTIFIERS
+    prev_round_trip = _ROUND_TRIP
     _INCLUDE_COMMENTS = include_comments
+    _SANITIZE_IDENTIFIERS = sanitize_identifiers
+    _ROUND_TRIP = round_trip
     try:
         return _ast_to_cangjie_impl(root)
     finally:
         _INCLUDE_COMMENTS = prev
+        _SANITIZE_IDENTIFIERS = prev_sanitize
+        _ROUND_TRIP = prev_round_trip
 
 
 def _ast_to_cangjie_impl(root: ASTNode) -> str:
@@ -459,7 +495,7 @@ def _ast_to_cangjie_impl(root: ASTNode) -> str:
 
 def _emit_class(node: ASTNode) -> str:
     pos = _position_comment(node)
-    name = (node.name or "").strip()
+    name = _sanitize_identifier((node.name or "").strip())
     inherited = node.list_props.get("inheritedTypes", [])
     base_str = ""
     if inherited:
@@ -481,9 +517,10 @@ def _emit_class(node: ASTNode) -> str:
 
 def _emit_func_decl(node: ASTNode, indent: str) -> str:
     pos = _position_comment(node)
-    name = (node.name or "").strip()
+    name = _sanitize_identifier((node.name or "").strip())
     if " " in name and "(" in name:
         name = name.split("(")[0].strip()
+    is_init = name == "init"
     params = []
     ret_type = "Unit"
     for c in node.children:
@@ -492,7 +529,7 @@ def _emit_func_decl(node: ASTNode, indent: str) -> str:
                 if fb.type == "FuncParamList":
                     for p in fb.children:
                         if p.type == "FuncParam":
-                            pname = (p.name or "_").strip()
+                            pname = _sanitize_identifier((p.name or "_").strip())
                             pt = "Unknown"
                             for tc in p.children:
                                 if tc.type in ("RefType", "PrimitiveType"):
@@ -503,13 +540,17 @@ def _emit_func_decl(node: ASTNode, indent: str) -> str:
                     ret_type = _emit_type(fb)
             for fb in c.children:
                 if fb.type == "RefType" and not fb.name:
-                    ret_type = fb.props.get("ty", ret_type).split("-")[-1]
+                    ret_type = fb.props.get("ty", ret_type)
                 if fb.type == "Block":
                     body = _emit_block_body(fb, indent + "    ")
                     param_str = ", ".join(params)
-                    return pos + indent + f"func {name}({param_str}) -> {ret_type} {{\n{body}\n{indent}}}\n"
+                    if is_init:
+                        return pos + indent + f"init({param_str}) {{\n{body}\n{indent}}}\n"
+                    return pos + indent + f"func {name}({param_str}): {ret_type} {{\n{body}\n{indent}}}\n"
     param_str = ", ".join(params)
-    return pos + indent + f"func {name}({param_str}) -> {ret_type} {{\n{indent}}}\n"
+    if is_init:
+        return pos + indent + f"init({param_str}) {{\n{indent}}}\n"
+    return pos + indent + f"func {name}({param_str}): {ret_type} {{\n{indent}}}\n"
 
 
 def _emit_main(node: ASTNode) -> str:

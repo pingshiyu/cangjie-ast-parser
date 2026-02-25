@@ -8,11 +8,17 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 
+_TYPE_TAG_PREFIX_RE = re.compile(
+    r"\b(?:Class|Enum|Interface|Generics|Primitive|Struct|Trait|TypeAlias|Alias|Module|Package)-"
+)
+
+
 @dataclass
 class ASTNode:
     """A node in the parsed AST. type and name identify the node; props hold key-value metadata; children are nested nodes."""
     type: str
     name: str = ""
+    value: Optional[str] = None
     props: dict = field(default_factory=dict)
     children: List["ASTNode"] = field(default_factory=list)
     list_props: dict = field(default_factory=dict)  # key -> list of ASTNode (or raw values for simple lists)
@@ -91,6 +97,11 @@ def _parse_line(line: str) -> tuple:
     return ("comment",)
 
 
+def _normalize_type_expr(type_expr: str) -> str:
+    """Normalize compiler-tagged type expressions, preserving function arrows."""
+    return _TYPE_TAG_PREFIX_RE.sub("", type_expr)
+
+
 class LineReader:
     def __init__(self, path: str):
         self.lines: List[tuple] = []
@@ -116,6 +127,25 @@ class LineReader:
 
     def at_end(self) -> bool:
         return self.i >= len(self.lines)
+
+
+def _parse_lit_const_name(name: str) -> tuple[str, Optional[str]]:
+    text = name.strip()
+    if not text:
+        return ("", None)
+    parts = text.split(None, 1)
+    kind = parts[0]
+    raw_value = parts[1].strip() if len(parts) > 1 else ""
+    if raw_value.startswith('"') and raw_value.endswith('"') and len(raw_value) >= 2:
+        return (kind, raw_value[1:-1])
+    return (kind, raw_value or None)
+
+
+def _make_node(ntype: str, name: str) -> ASTNode:
+    if ntype == "LitConstExpr":
+        lit_kind, lit_value = _parse_lit_const_name(name)
+        return ASTNode(type=ntype, name=lit_kind, value=lit_value)
+    return ASTNode(type=ntype, name=name)
 
 
 def _parse_node_content(reader: LineReader, node: ASTNode) -> None:
@@ -154,7 +184,7 @@ def _parse_node_content(reader: LineReader, node: ASTNode) -> None:
                     continue
                 if ek[0] == "node":
                     reader.consume()
-                    child = ASTNode(type=ek[1], name=ek[2])
+                    child = _make_node(ek[1], ek[2])
                     node.list_props[key].append(child)
                     _parse_node_content(reader, child)
                     continue
@@ -162,10 +192,13 @@ def _parse_node_content(reader: LineReader, node: ASTNode) -> None:
                 reader.consume()
             continue
         if kind[0] == "kv":
-            node.props[kind[1]] = kind[2]
+            key, value = kind[1], kind[2]
+            if key == "ty":
+                value = _normalize_type_expr(value)
+            node.props[key] = value
             continue
         if kind[0] == "node":
-            child = ASTNode(type=kind[1], name=kind[2])
+            child = _make_node(kind[1], kind[2])
             node.children.append(child)
             _parse_node_content(reader, child)
             continue
@@ -185,7 +218,7 @@ def parse_ast_repr(path: str) -> ASTNode:
     if root_name.endswith(" {"):
         root_name = root_name[:-2].rstrip()
 
-    root = ASTNode(type=root_type, name=root_name)
+    root = _make_node(root_type, root_name)
     _parse_node_content(reader, root)
 
     if root.type == "File":

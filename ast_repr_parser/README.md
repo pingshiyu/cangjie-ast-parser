@@ -10,6 +10,9 @@ from ast_repr_parser import parse_ast_repr, ast_to_cangjie
 root = parse_ast_repr("path/to/desugared-ast-repr.txt")
 cangjie_source = ast_to_cangjie(root)
 print(cangjie_source)
+
+# Enable round-trip lowering
+cangjie_source = ast_to_cangjie(root, sanitize_identifiers=True, round_trip=True)
 ```
 
 ## Command line

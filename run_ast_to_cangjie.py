@@ -30,6 +30,11 @@ def main():
         help="Omit position comments (// position: ...) from the output",
     )
     parser.add_argument(
+        "--round-trip",
+        action="store_true",
+        help="Round-trip identifier spelling by replacing '-' with '__' and '$' with 'dollar_'",
+    )
+    parser.add_argument(
         "-o", "--output",
         metavar="FILE",
         help="Write output to FILE instead of stdout",
@@ -39,7 +44,12 @@ def main():
     if not os.path.isfile(args.input):
         parser.error(f"File not found: {args.input}")
     root = parse_ast_repr(args.input)
-    out = ast_to_cangjie(root, include_comments=not args.no_comments)
+    out = ast_to_cangjie(
+        root,
+        include_comments=not args.no_comments,
+        sanitize_identifiers=args.round_trip,
+        round_trip=args.round_trip,
+    )
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
             f.write(out)

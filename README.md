@@ -46,6 +46,9 @@ python3 run_ast_to_cangjie.py path/to/ast-dump.txt -o output.cj
 
 # Omit position comments (// position: ...) from the output
 python3 run_ast_to_cangjie.py path/to/ast-dump.txt --no-comments
+
+# Round-trip identifier spelling ('-' -> '__', '$' -> 'dollar_')
+python3 run_ast_to_cangjie.py path/to/ast-dump.txt --round-trip
 ```
 
 **Options:**
@@ -55,6 +58,7 @@ python3 run_ast_to_cangjie.py path/to/ast-dump.txt --no-comments
 | `input` | Path to the AST repr file (optional; default: `desugared-ast-repr.txt` in this directory). |
 | `-o`, `--output FILE` | Write desugared Cangjie to `FILE` instead of stdout. |
 | `--no-comments` | Do not emit position comments in the output. |
+| `--round-trip` | Enable round-trip lowering: sanitize identifiers and emit block expressions as `{ => ... }()`. |
 
 ## Using as a library
 
@@ -70,10 +74,13 @@ print(source)
 
 # Without position comments
 source = ast_to_cangjie(root, include_comments=False)
+
+# Enable round-trip lowering (identifier sanitization + block-expression wrapping)
+source = ast_to_cangjie(root, sanitize_identifiers=True, round_trip=True)
 ```
 
 - **`parse_ast_repr(path)`** — Reads the file at `path` and returns the root `ASTNode` of the parsed tree.
-- **`ast_to_cangjie(root, include_comments=True)`** — Converts the parsed AST back to desugared Cangjie source.
+- **`ast_to_cangjie(root, include_comments=True, sanitize_identifiers=False, round_trip=False)`** — Converts the parsed AST back to desugared Cangjie source.
 
 ## Behaviour
 
