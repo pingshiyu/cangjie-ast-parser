@@ -482,6 +482,7 @@ def _emit_func_decl(node: ASTNode, indent: str) -> str:
     name = (node.name or "").strip()
     if " " in name and "(" in name:
         name = name.split("(")[0].strip()
+    is_init = name == "init"
     params = []
     ret_type = "Unit"
     for c in node.children:
@@ -505,8 +506,12 @@ def _emit_func_decl(node: ASTNode, indent: str) -> str:
                 if fb.type == "Block":
                     body = _emit_block_body(fb, indent + "    ")
                     param_str = ", ".join(params)
+                    if is_init:
+                        return pos + indent + f"init({param_str}) {{\n{body}\n{indent}}}\n"
                     return pos + indent + f"func {name}({param_str}): {ret_type} {{\n{body}\n{indent}}}\n"
     param_str = ", ".join(params)
+    if is_init:
+        return pos + indent + f"init({param_str}) {{\n{indent}}}\n"
     return pos + indent + f"func {name}({param_str}): {ret_type} {{\n{indent}}}\n"
 
 
