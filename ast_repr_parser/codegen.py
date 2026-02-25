@@ -246,7 +246,7 @@ def _emit_expr(node: ASTNode, indent: str) -> str:
             if c.type == "Block":
                 body = _emit_block_body(c, indent + "    ")
                 break
-        return pos + indent + f"{{ ({', '.join(param_strs)}) => {{\n{body}\n{indent}}}\n{indent}}}"
+        return pos + indent + f"{{ {', '.join(param_strs)} => {{\n{body}\n{indent}}}\n{indent}}}"
     if node.type == "TryExpr":
         try_block = ""
         catches = []
