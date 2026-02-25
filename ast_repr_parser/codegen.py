@@ -381,7 +381,7 @@ def _emit_match_case(node: ASTNode, indent: str) -> str:
             if c.type == "Block":
                 body = _emit_block_body(c, indent + "    ")
                 break
-    return indent + f"{pat} => {{\n{body}\n{indent}}}"
+    return indent + f"case {pat} => {{\n{body}\n{indent}}}"
 
 
 def _get_catch_pattern(catch_node: ASTNode) -> tuple:
