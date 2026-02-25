@@ -182,7 +182,12 @@ def _emit_expr(node: ASTNode, indent: str) -> str:
     if node.type == "MatchExpr":
         sel = ""
         for c in node.children:
-            if c.type != "MatchCase" and "selector" not in str(c.props):
+            if c.type == "selector":
+                if c.children:
+                    sel = _emit_expr(c.children[0], "").strip()
+                    break
+                continue
+            if c.type not in ("MatchCase", "patterns"):
                 sel = _emit_expr(c, "").strip()
                 break
         sel_node = node.props.get("selector")
